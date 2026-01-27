@@ -1,0 +1,163 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Premium SaaS Design System - Marketplace Multi-tenant */
+
+@layer base {
+  :root {
+    /* Primary - Elegant Dark Green */
+    --primary: 158 62% 30%;
+    --primary-foreground: 0 0% 100%;
+    
+    /* Secondary - Soft Light Green */
+    --secondary: 158 40% 94%;
+    --secondary-foreground: 158 62% 25%;
+    
+    /* Background */
+    --background: 0 0% 100%;
+    --background-secondary: 0 0% 97%;
+    --foreground: 220 20% 15%;
+    
+    /* Muted */
+    --muted: 220 14% 96%;
+    --muted-foreground: 220 10% 45%;
+    
+    /* Card */
+    --card: 0 0% 100%;
+    --card-foreground: 220 20% 15%;
+    
+    /* Popover */
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 20% 15%;
+    
+    /* Accent */
+    --accent: 158 40% 94%;
+    --accent-foreground: 158 62% 25%;
+    
+    /* Destructive */
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    
+    /* Success */
+    --success: 142 76% 36%;
+    --success-foreground: 0 0% 100%;
+    
+    /* Warning */
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 100%;
+    
+    /* Info */
+    --info: 199 89% 48%;
+    --info-foreground: 0 0% 100%;
+    
+    /* Border & Input */
+    --border: 220 13% 91%;
+    --input: 220 13% 91%;
+    --ring: 158 62% 30%;
+    
+    /* Radius */
+    --radius: 0.75rem;
+    
+    /* Sidebar - Producer/Admin */
+    --sidebar-background: 220 20% 12%;
+    --sidebar-foreground: 220 10% 90%;
+    --sidebar-primary: 158 62% 45%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 220 15% 18%;
+    --sidebar-accent-foreground: 220 10% 90%;
+    --sidebar-border: 220 15% 20%;
+    --sidebar-ring: 158 62% 45%;
+    
+    /* Status Colors */
+    --status-new: 199 89% 48%;
+    --status-confirmed: 158 62% 45%;
+    --status-preparing: 38 92% 50%;
+    --status-done: 142 76% 36%;
+    --status-cancelled: 0 72% 51%;
+  }
+
+  .dark {
+    --primary: 158 62% 45%;
+    --primary-foreground: 0 0% 100%;
+    
+    --secondary: 220 15% 18%;
+    --secondary-foreground: 220 10% 90%;
+    
+    --background: 220 20% 10%;
+    --background-secondary: 220 18% 14%;
+    --foreground: 220 10% 95%;
+    
+    --muted: 220 15% 18%;
+    --muted-foreground: 220 10% 60%;
+    
+    --card: 220 18% 14%;
+    --card-foreground: 220 10% 95%;
+    
+    --popover: 220 18% 14%;
+    --popover-foreground: 220 10% 95%;
+    
+    --accent: 220 15% 22%;
+    --accent-foreground: 220 10% 95%;
+    
+    --border: 220 15% 22%;
+    --input: 220 15% 22%;
+    --ring: 158 62% 45%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+  
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-semibold tracking-tight;
+  }
+}
+
+@layer utilities {
+  .bg-background-secondary {
+    background-color: hsl(var(--background-secondary));
+  }
+  
+  /* Status utilities */
+  .status-new {
+    @apply bg-blue-100 text-blue-700;
+  }
+  
+  .status-confirmed {
+    @apply bg-emerald-100 text-emerald-700;
+  }
+  
+  .status-preparing {
+    @apply bg-amber-100 text-amber-700;
+  }
+  
+  .status-done {
+    @apply bg-green-100 text-green-700;
+  }
+  
+  .status-cancelled {
+    @apply bg-red-100 text-red-700;
+  }
+  
+  /* Premium card shadow */
+  .shadow-premium {
+    box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.05), 0 1px 2px -1px rgb(0 0 0 / 0.05);
+  }
+  
+  .shadow-premium-lg {
+    box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05), 0 2px 4px -2px rgb(0 0 0 / 0.05);
+  }
+  
+  /* Glass effect */
+  .glass {
+    @apply bg-white/80 backdrop-blur-sm;
+  }
+}
