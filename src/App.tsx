@@ -18,6 +18,9 @@ import OrderConfirmedPage from "./pages/OrderConfirmedPage";
 // ✅ NOVA PAGE (CONVITE / CRIAR SENHA)
 import InvitePage from "./pages/InvitePage";
 
+// ✅ NOVA PAGE (CALLBACK MERCADO PAGO)
+import MpCallbackPage from "./pages/MpCallbackPage";
+
 // Producer
 import ProducerDashboard from "./pages/app/produtor/Dashboard";
 import ProducerProducts from "./pages/app/produtor/Products";
@@ -57,6 +60,9 @@ const AppRoutes = () => (
 
     {/* ✅ CONVITE DO PRODUTOR (CRIAR SENHA) */}
     <Route path="/convite" element={<InvitePage />} />
+
+    {/* ✅ CALLBACK OAUTH MERCADO PAGO (NÃO PROTEGIDA) */}
+    <Route path="/mp/callback" element={<MpCallbackPage />} />
 
     {/* ✅ Pedido confirmado (checkout) */}
     <Route path="/pedido-confirmado" element={<OrderConfirmedPage />} />
