@@ -3,12 +3,16 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, apikey, content-type, x-client-info, x-application-name",
+  "Access-Control-Allow-Headers":
+    "authorization, apikey, content-type, x-client-info, x-application-name, x-supabase-auth",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
 const json = (payload: unknown, status = 200) =>
-  new Response(JSON.stringify(payload), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+  new Response(JSON.stringify(payload), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
 
 function b64url(input: string) {
   return btoa(input).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
@@ -30,6 +34,21 @@ async function hmacSha256(secret: string, data: string) {
   return b64url(bin);
 }
 
+function getBearerToken(req: Request) {
+  const authHeader =
+    req.headers.get("authorization") ||
+    req.headers.get("Authorization") ||
+    "";
+
+  const tokenFromAuth = authHeader.toLowerCase().startsWith("bearer ")
+    ? authHeader.slice(7).trim()
+    : authHeader.trim();
+
+  const tokenFromAlt = (req.headers.get("x-supabase-auth") || "").trim();
+
+  return tokenFromAuth || tokenFromAlt || "";
+}
+
 Deno.serve(async (req) => {
   try {
     if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -42,18 +61,43 @@ Deno.serve(async (req) => {
     const MP_REDIRECT_URI = Deno.env.get("MP_REDIRECT_URI");
     const MP_STATE_SECRET = Deno.env.get("MP_STATE_SECRET");
 
-    if (!SUPABASE_URL || !SERVICE_ROLE_KEY) return json({ error: "Secrets Supabase ausentes" }, 500);
-    if (!MP_CLIENT_ID || !MP_REDIRECT_URI || !MP_STATE_SECRET) return json({ error: "Secrets MP ausentes" }, 500);
+    if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
+      return json({ error: "Secrets Supabase ausentes" }, 500);
+    }
 
-    // token do usuário (produtor) - vem do supabase.functions.invoke
-    const auth = req.headers.get("authorization") || "";
-    const token = auth.toLowerCase().startsWith("bearer ") ? auth.slice(7).trim() : auth.trim();
-    if (!token) return json({ error: "Missing authorization header" }, 401);
+    // 👇 aqui é o ponto que MUITO provavelmente está falhando pra você
+    if (!MP_CLIENT_ID || !MP_REDIRECT_URI || !MP_STATE_SECRET) {
+      return json(
+        {
+          error: "Secrets MP ausentes",
+          missing: {
+            MP_CLIENT_ID: !MP_CLIENT_ID,
+            MP_REDIRECT_URI: !MP_REDIRECT_URI,
+            MP_STATE_SECRET: !MP_STATE_SECRET,
+          },
+        },
+        500
+      );
+    }
+
+    // token do usuário (produtor)
+    const token = getBearerToken(req);
+    if (!token) {
+      return json(
+        { error: "Missing authorization header (Bearer token não chegou na Edge Function)" },
+        401
+      );
+    }
 
     const sb = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
 
     const { data: userData, error: userErr } = await sb.auth.getUser(token);
-    if (userErr || !userData?.user?.id) return json({ error: "Invalid JWT" }, 401);
+    if (userErr || !userData?.user?.id) {
+      return json(
+        { error: "Invalid JWT", details: userErr?.message || null },
+        401
+      );
+    }
 
     const userId = userData.user.id;
 
@@ -63,7 +107,11 @@ Deno.serve(async (req) => {
       .eq("user_id", userId)
       .maybeSingle();
 
-    if (prodErr || !produtor?.id) return json({ error: "Produtor não encontrado" }, 404);
+    if (prodErr) {
+      return json({ error: "Erro ao buscar produtor", details: prodErr.message }, 500);
+    }
+
+    if (!produtor?.id) return json({ error: "Produtor não encontrado" }, 404);
     if (produtor.plano === "admin") return json({ error: "Admin não conecta como produtor" }, 403);
 
     // state assinado (anti-tamper)
@@ -73,6 +121,7 @@ Deno.serve(async (req) => {
       ts: Date.now(),
       nonce: crypto.randomUUID(),
     };
+
     const payloadStr = JSON.stringify(payload);
     const payloadB64 = b64url(payloadStr);
     const sig = await hmacSha256(MP_STATE_SECRET, payloadB64);
