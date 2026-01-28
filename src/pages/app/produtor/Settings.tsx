@@ -115,60 +115,46 @@ const ProducerSettings = () => {
     }
   };
 
-  // =====================
-  // MERCADO PAGO CONNECT
-  // =====================
-  const handleConnectMP = async () => {
-    try {
-      if (!producer?.id) return;
+ // =====================
+// MERCADO PAGO CONNECT
+// =====================
+const handleConnectMP = async () => {
+  try {
+    if (!producer?.id) return;
 
-      setMpLoading(true);
+    setMpLoading(true);
 
-      // ✅ pega token do usuário logado
-      const { data: sessionData, error: sessionErr } = await supabase.auth.getSession();
-      if (sessionErr) {
-        console.error('getSession error:', sessionErr);
-        toast.error('Falha ao validar sessão. Faça login novamente.');
-        return;
-      }
+    // ✅ NÃO setar Authorization manualmente.
+    // O supabase-js já envia o JWT da sessão automaticamente para Functions.
+    const { data, error } = await supabase.functions.invoke('mp-oauth-start', {
+      body: {
+        produtor_id: producer.id,
+      },
+    });
 
-      const accessToken = sessionData?.session?.access_token;
-      if (!accessToken) {
-        toast.error('Sessão inválida. Faça login novamente.');
-        return;
-      }
-
-      // ✅ chama Edge Function que gera a URL de autorização
-      const { data, error } = await supabase.functions.invoke('mp-oauth-start', {
-        // não precisa body aqui
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'x-supabase-auth': accessToken, // ✅ garante que sua função vai ler o token
-        },
-      });
-
-      if (error) {
-        console.error('mp-oauth-start error:', error);
-        toast.error(error.message || 'Erro ao iniciar conexão com Mercado Pago');
-        return;
-      }
-
-      // ✅ sua Edge Function retorna { ok: true, url }
-      if (!data?.ok || !data?.url) {
-        console.error('mp-oauth-start response:', data);
-        toast.error(data?.error || 'Falha ao gerar link de autorização');
-        return;
-      }
-
-      // ✅ Redireciona para o Mercado Pago
-      window.location.assign(data.url);
-    } catch (err: any) {
-      console.error(err);
-      toast.error(err?.message || 'Erro ao conectar Mercado Pago');
-    } finally {
-      setMpLoading(false);
+    if (error) {
+      console.error('mp-oauth-start error:', error);
+      toast.error(error.message || 'Erro ao iniciar conexão com Mercado Pago');
+      return;
     }
-  };
+
+    // ✅ sua Edge Function retorna "url" (não "auth_url")
+    if (!data?.ok || !data?.url) {
+      console.error('mp-oauth-start response:', data);
+      toast.error(data?.error || 'Falha ao gerar link de autorização');
+      return;
+    }
+
+    // ✅ Redireciona para o Mercado Pago
+    window.location.href = data.url;
+  } catch (err: any) {
+    console.error(err);
+    toast.error(err?.message || 'Erro ao conectar Mercado Pago');
+  } finally {
+    setMpLoading(false);
+  }
+};
+
 
   // =====================
   // MERCADO PAGO DISCONNECT (DB ONLY)
