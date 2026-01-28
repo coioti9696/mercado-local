@@ -61,8 +61,10 @@ const AppRoutes = () => (
     {/* ✅ CONVITE DO PRODUTOR (CRIAR SENHA) */}
     <Route path="/convite" element={<InvitePage />} />
 
-    {/* ✅ CALLBACK OAUTH MERCADO PAGO (NÃO PROTEGIDA) */}
-    <Route path="/mp/callback" element={<MpCallbackPage />} />
+   {/* ✅ CALLBACK OAUTH MERCADO PAGO (NÃO PROTEGIDA) */}
+<Route path="/mp/callback" element={<MpCallbackPage />} />
+<Route path="/mp-callback" element={<MpCallbackPage />} />
+
 
     {/* ✅ Pedido confirmado (checkout) */}
     <Route path="/pedido-confirmado" element={<OrderConfirmedPage />} />
