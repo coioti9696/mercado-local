@@ -124,15 +124,15 @@ const ProducerSettings = () => {
 
       setMpLoading(true);
 
-      // ✅ garante token válido (e reduz "Invalid JWT" no Vercel)
-      const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
-      if (refreshError) {
-        console.error('refreshSession error:', refreshError);
-        toast.error('Sessão expirada. Faça login novamente.');
+      // ✅ pega token do usuário logado
+      const { data: sessionData, error: sessionErr } = await supabase.auth.getSession();
+      if (sessionErr) {
+        console.error('getSession error:', sessionErr);
+        toast.error('Falha ao validar sessão. Faça login novamente.');
         return;
       }
 
-      const accessToken = refreshed?.session?.access_token;
+      const accessToken = sessionData?.session?.access_token;
       if (!accessToken) {
         toast.error('Sessão inválida. Faça login novamente.');
         return;
@@ -140,13 +140,10 @@ const ProducerSettings = () => {
 
       // ✅ chama Edge Function que gera a URL de autorização
       const { data, error } = await supabase.functions.invoke('mp-oauth-start', {
-        body: {
-          produtor_id: producer.id,
-        },
+        // não precisa body aqui
         headers: {
-          // manda nos 2 formatos (igual você fez em outras partes do projeto)
-          authorization: `Bearer ${accessToken}`,
-          'x-supabase-auth': accessToken,
+          Authorization: `Bearer ${accessToken}`,
+          'x-supabase-auth': accessToken, // ✅ garante que sua função vai ler o token
         },
       });
 
@@ -156,17 +153,15 @@ const ProducerSettings = () => {
         return;
       }
 
-      // ✅ sua function (pelo index.ts que você me mandou) retorna { ok: true, url }
-      const authUrl = data?.auth_url || data?.url;
-
-      if (!data?.ok || !authUrl) {
+      // ✅ sua Edge Function retorna { ok: true, url }
+      if (!data?.ok || !data?.url) {
         console.error('mp-oauth-start response:', data);
         toast.error(data?.error || 'Falha ao gerar link de autorização');
         return;
       }
 
       // ✅ Redireciona para o Mercado Pago
-      window.location.href = authUrl;
+      window.location.assign(data.url);
     } catch (err: any) {
       console.error(err);
       toast.error(err?.message || 'Erro ao conectar Mercado Pago');
@@ -184,7 +179,6 @@ const ProducerSettings = () => {
 
       setMpLoading(true);
 
-      // ⚠️ Apenas limpa campos do banco
       const { error } = await supabase
         .from('produtores')
         .update({
@@ -301,7 +295,6 @@ const ProducerSettings = () => {
                 type="button"
                 variant="outline"
                 onClick={async () => {
-                  // ✅ Recarrega status do banco sem quebrar
                   if (!producer?.id) return;
                   try {
                     const { data, error } = await supabase
@@ -369,9 +362,7 @@ const ProducerSettings = () => {
                 type="file"
                 hidden
                 accept="image/*"
-                onChange={e =>
-                  e.target.files && uploadImagem(e.target.files[0], 'capa')
-                }
+                onChange={e => e.target.files && uploadImagem(e.target.files[0], 'capa')}
               />
             </div>
           </div>
@@ -382,10 +373,7 @@ const ProducerSettings = () => {
             <div className="flex items-center gap-4 mt-2">
               <div className="w-28 h-28 rounded-xl overflow-hidden border bg-muted flex items-center justify-center">
                 {logoUrl ? (
-                  <img
-                    src={logoUrl}
-                    className="w-full h-full object-cover"
-                  />
+                  <img src={logoUrl} className="w-full h-full object-cover" />
                 ) : (
                   <span className="text-muted-foreground text-sm">Sem logo</span>
                 )}
@@ -423,9 +411,7 @@ const ProducerSettings = () => {
                 type="file"
                 hidden
                 accept="image/*"
-                onChange={e =>
-                  e.target.files && uploadImagem(e.target.files[0], 'logo')
-                }
+                onChange={e => e.target.files && uploadImagem(e.target.files[0], 'logo')}
               />
             </div>
           </div>
@@ -464,17 +450,11 @@ const ProducerSettings = () => {
             </div>
             <div className="flex justify-between">
               <Label>Dinheiro</Label>
-              <Switch
-                checked={aceitaDinheiro}
-                onCheckedChange={setAceitaDinheiro}
-              />
+              <Switch checked={aceitaDinheiro} onCheckedChange={setAceitaDinheiro} />
             </div>
             <div className="flex justify-between">
               <Label>Cartão</Label>
-              <Switch
-                checked={aceitaCartao}
-                onCheckedChange={setAceitaCartao}
-              />
+              <Switch checked={aceitaCartao} onCheckedChange={setAceitaCartao} />
             </div>
           </div>
 
