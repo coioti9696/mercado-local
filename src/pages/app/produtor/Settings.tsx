@@ -124,10 +124,15 @@ const ProducerSettings = () => {
 
       setMpLoading(true);
 
-      // ✅ garante sessão válida e pega token do usuário logado
-      const { data: sessionData } = await supabase.auth.getSession();
-      const accessToken = sessionData?.session?.access_token;
+      // ✅ garante token válido (e reduz "Invalid JWT" no Vercel)
+      const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
+      if (refreshError) {
+        console.error('refreshSession error:', refreshError);
+        toast.error('Sessão expirada. Faça login novamente.');
+        return;
+      }
 
+      const accessToken = refreshed?.session?.access_token;
       if (!accessToken) {
         toast.error('Sessão inválida. Faça login novamente.');
         return;
@@ -137,11 +142,11 @@ const ProducerSettings = () => {
       const { data, error } = await supabase.functions.invoke('mp-oauth-start', {
         body: {
           produtor_id: producer.id,
-          // opcional: você pode enviar "redirect_to" aqui se sua function suportar
-          // redirect_to: `${window.location.origin}/mp/callback`,
         },
         headers: {
-          Authorization: `Bearer ${accessToken}`,
+          // manda nos 2 formatos (igual você fez em outras partes do projeto)
+          authorization: `Bearer ${accessToken}`,
+          'x-supabase-auth': accessToken,
         },
       });
 
@@ -151,14 +156,17 @@ const ProducerSettings = () => {
         return;
       }
 
-      if (!data?.ok || !data?.auth_url) {
+      // ✅ sua function (pelo index.ts que você me mandou) retorna { ok: true, url }
+      const authUrl = data?.auth_url || data?.url;
+
+      if (!data?.ok || !authUrl) {
         console.error('mp-oauth-start response:', data);
         toast.error(data?.error || 'Falha ao gerar link de autorização');
         return;
       }
 
       // ✅ Redireciona para o Mercado Pago
-      window.location.href = data.auth_url;
+      window.location.href = authUrl;
     } catch (err: any) {
       console.error(err);
       toast.error(err?.message || 'Erro ao conectar Mercado Pago');
