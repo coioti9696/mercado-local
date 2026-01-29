@@ -22,3 +22,29 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Env files (never commit)
+.env
+.env.*
+!.env.example
+.env.supabase
+.env.supabase.local
+
+# Supabase local / CLI
+supabase/.env
+supabase/.env.*
+supabase/.temp/
+supabase/.branches/
+
+# Keys / certs
+*.key
+*.pem
+
+# Node / build
+node_modules/
+dist/
+build/
+.vercel/
+
+# Logs
+*.log
