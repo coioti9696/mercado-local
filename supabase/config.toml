@@ -8,7 +8,7 @@ entrypoint = "./functions/invite-producer/index.ts"
 
 [functions.mp-create-pix]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/mp-create-pix/deno.json"
 entrypoint = "./functions/mp-create-pix/index.ts"
 

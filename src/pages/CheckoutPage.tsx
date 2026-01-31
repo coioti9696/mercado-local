@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useCart } from '@/contexts/CartContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -17,6 +17,9 @@ import {
 import { supabase } from '@/lib/supabase';
 import { toast } from 'sonner';
 
+// ✅ cria um client "guest" com header x-guest-token (necessário para RLS do cliente sem login)
+import { createClient } from '@supabase/supabase-js';
+
 type PaymentMethod = 'pix' | 'dinheiro' | 'cartao';
 
 type PixData = {
@@ -25,6 +28,26 @@ type PixData = {
   expires_at: string | null;
   payment_id: string | null;
 };
+
+const GUEST_TOKEN_KEY = 'ml_guest_token';
+
+function getOrCreateGuestToken() {
+  try {
+    const existing = localStorage.getItem(GUEST_TOKEN_KEY);
+    if (existing && existing.trim().length > 10) return existing.trim();
+
+    const token =
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+    localStorage.setItem(GUEST_TOKEN_KEY, token);
+    return token;
+  } catch {
+    // fallback: se localStorage falhar por algum motivo (raro)
+    return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+}
 
 const CheckoutPage = () => {
   const navigate = useNavigate();
@@ -56,6 +79,9 @@ const CheckoutPage = () => {
   // ✅ PIX UI (sem criar rota nova)
   const [pixData, setPixData] = useState<PixData | null>(null);
   const [pixOrderNumber, setPixOrderNumber] = useState<string | null>(null);
+
+  // ✅ guarda o total do pedido no momento do PIX (porque clearCart zera o total do contexto)
+  const [pixTotal, setPixTotal] = useState<number | null>(null);
 
   // 🚨 Segurança
   if (!produtor_id) {
@@ -90,7 +116,10 @@ const CheckoutPage = () => {
 
   // 💰 Normaliza valor do troco (aceita 10, 10.5, 10,50)
   const parseMoneyBR = (value: string) => {
-    const cleaned = value.replace(/[^\d,.-]/g, '').replace('.', '').replace(',', '.');
+    const cleaned = value
+      .replace(/[^\d,.-]/g, '')
+      .replace('.', '')
+      .replace(',', '.');
     const num = Number(cleaned);
     return Number.isFinite(num) ? num : NaN;
   };
@@ -103,6 +132,28 @@ const CheckoutPage = () => {
       toast.error('Não foi possível copiar. Selecione e copie manualmente.');
     }
   };
+
+  // ✅ cria um supabase client com header do guest_token (usado só no checkout)
+  const guestToken = useMemo(() => getOrCreateGuestToken(), []);
+  const supabaseGuest = useMemo(() => {
+    const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+    const anon = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+
+    // se por algum motivo o env não existir, cai no client normal (não quebra agora)
+    if (!url || !anon) return null;
+
+    return createClient(url, anon, {
+      global: {
+        headers: {
+          'x-guest-token': guestToken,
+        },
+      },
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+      },
+    });
+  }, [guestToken]);
 
   // ===============================
   // CONFIRMAR PEDIDO
@@ -139,6 +190,7 @@ const CheckoutPage = () => {
       // ✅ limpa qualquer PIX anterior (caso o usuário volte e gere de novo)
       setPixData(null);
       setPixOrderNumber(null);
+      setPixTotal(null);
 
       const numeroPedido = `${new Date().getFullYear()}-${Math.floor(
         1000 + Math.random() * 9000
@@ -169,8 +221,13 @@ const CheckoutPage = () => {
         }
       }
 
+      // ✅ Para RLS do cliente anônimo funcionar, precisamos:
+      // - gravar guest_token na tabela pedidos
+      // - mandar header x-guest-token nas requisições (supabaseGuest)
+      const db = supabaseGuest ?? supabase;
+
       // 1️⃣ Criar pedido
-      const { data: pedido, error: pedidoError } = await supabase
+      const { data: pedido, error: pedidoError } = await db
         .from('pedidos')
         .insert({
           numero_pedido: numeroPedido,
@@ -188,6 +245,9 @@ const CheckoutPage = () => {
           status: 'aguardando_confirmacao',
           status_pagamento: statusPagamento,
           payment_provider: paymentMethod === 'pix' ? 'mercadopago' : null,
+
+          // ✅ NOVO: identifica o cliente anônimo
+          guest_token: guestToken,
         })
         .select()
         .single();
@@ -202,7 +262,7 @@ const CheckoutPage = () => {
         preco_unitario: item.product.price,
       }));
 
-      const { error: itensError } = await supabase.from('pedido_itens').insert(itens);
+      const { error: itensError } = await db.from('pedido_itens').insert(itens);
       if (itensError) throw itensError;
 
       // ✅ Se NÃO for PIX, mantém seu fluxo atual INTACTO
@@ -217,8 +277,10 @@ const CheckoutPage = () => {
         return;
       }
 
-      // ✅ PIX: chama Edge Function para gerar QR (valor = total do carrinho/pedido)
-      // Observação: a função idealmente usa o pedido_id para buscar total/produtor no banco (mais seguro).
+      // ✅ PIX: salva total antes de limpar o carrinho (pra não aparecer 0,00 na tela do QR)
+      setPixTotal(Number(total) || 0);
+
+      // ✅ PIX: chama Edge Function para gerar QR (valor = pedido no banco)
       const { data: mpData, error: mpErr } = await supabase.functions.invoke(
         'mp-create-pix',
         {
@@ -310,11 +372,13 @@ const CheckoutPage = () => {
               <div>
                 <p className="font-semibold">Pagamento via PIX</p>
                 <p className="text-sm text-muted-foreground">
-                  Pedido: <b>#{pixOrderNumber}</b> • Total: <b>{formatPrice(total)}</b>
+                  Pedido: <b>#{pixOrderNumber}</b> • Total:{' '}
+                  <b>{formatPrice(pixTotal ?? 0)}</b>
                 </p>
                 {pixData.expires_at && (
                   <p className="text-xs text-muted-foreground mt-1">
-                    Expira em: {new Date(pixData.expires_at).toLocaleString('pt-BR')}
+                    Expira em:{' '}
+                    {new Date(pixData.expires_at).toLocaleString('pt-BR')}
                   </p>
                 )}
               </div>
@@ -366,7 +430,9 @@ const CheckoutPage = () => {
                 variant="outline"
                 className="w-full"
                 onClick={() => {
-                  toast.info('Assim que o pagamento for confirmado, o status atualizará sozinho.');
+                  toast.info(
+                    'Assim que o pagamento for confirmado, o status atualizará sozinho.'
+                  );
                 }}
               >
                 Já paguei (aguardar confirmação)
@@ -454,9 +520,7 @@ const CheckoutPage = () => {
               <Label>CEP</Label>
               <Input
                 value={formData.cep}
-                onChange={(e) =>
-                  setFormData({ ...formData, cep: formatCEP(e.target.value) })
-                }
+                onChange={(e) => setFormData({ ...formData, cep: formatCEP(e.target.value) })}
                 placeholder="00000-000"
                 inputMode="numeric"
               />
@@ -464,7 +528,9 @@ const CheckoutPage = () => {
               <Label>Observações</Label>
               <Textarea
                 value={formData.observacoes}
-                onChange={(e) => setFormData({ ...formData, observacoes: e.target.value })}
+                onChange={(e) =>
+                  setFormData({ ...formData, observacoes: e.target.value })
+                }
               />
             </div>
 
