@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { useNavigate, useLocation, useParams } from 'react-router-dom';
 import { CheckCircle, ArrowLeft } from 'lucide-react';
-import { supabase } from '@/lib/supabase';
+import { supabase, supabaseGuest } from '@/lib/supabase';
 import { toast } from 'sonner';
 
 const BRAZIL_TZ = 'America/Sao_Paulo';
@@ -80,7 +80,7 @@ const OrderConfirmedPage = () => {
     if (!d) return '—';
 
     return new Intl.DateTimeFormat('pt-BR', {
-      timeZone: BRAZIL_TZ, // ✅ força horário do Brasil
+      timeZone: BRAZIL_TZ,
       day: '2-digit',
       month: '2-digit',
       year: 'numeric',
@@ -109,7 +109,17 @@ const OrderConfirmedPage = () => {
     if (!numeroPedido) return;
 
     try {
-      const { data, error } = await supabase
+      setLoading(true);
+
+      // ✅ Escolhe client correto:
+      // - Logado => supabase (produtor)
+      // - Não logado => supabaseGuest (cliente com x-guest-token)
+      const { data: sessionData } = await supabase.auth.getSession();
+      const isLogged = !!sessionData?.session?.user;
+
+      const client = isLogged ? supabase : supabaseGuest;
+
+      const { data, error } = await client
         .from('pedidos')
         .select(
           `
@@ -144,7 +154,7 @@ const OrderConfirmedPage = () => {
       if (data.status) setStatus(data.status);
       if (data.created_at) setCreatedAt(data.created_at);
 
-      // ✅ NOVO: pagamento
+      // ✅ pagamento
       setMetodoPagamento(data.metodo_pagamento || null);
       setStatusPagamento(data.status_pagamento || 'pendente');
       setPaymentProvider(data.payment_provider || null);
@@ -231,10 +241,13 @@ const OrderConfirmedPage = () => {
               <span className="font-medium">{formatarDataHora(createdAt)}</span>
             </div>
 
-            {/* ✅ NOVO: status do pagamento (não interfere em nada do fluxo antigo) */}
             <div className="flex justify-between">
               <span className="text-muted-foreground">Pagamento</span>
-              <span className={`font-medium ${pagamentoAprovado ? 'text-success' : 'text-warning'}`}>
+              <span
+                className={`font-medium ${
+                  pagamentoAprovado ? 'text-success' : 'text-warning'
+                }`}
+              >
                 {formatarStatusPagamento(statusPagamento)}
               </span>
             </div>
@@ -242,13 +255,14 @@ const OrderConfirmedPage = () => {
             {paymentProvider && (
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Provedor</span>
-                <span className="font-medium">{formatarStatus(paymentProvider)}</span>
+                <span className="font-medium">
+                  {formatarStatus(paymentProvider)}
+                </span>
               </div>
             )}
           </div>
         </div>
 
-        {/* ✅ NOVO: bloco PIX (só aparece se for pix e não estiver pago) */}
         {isPix && !pagamentoAprovado && (
           <div className="bg-card rounded-2xl border p-6 mb-6 text-left space-y-4">
             <div>
@@ -259,14 +273,17 @@ const OrderConfirmedPage = () => {
             </div>
 
             {pixExpiresAt && (
-              <p className={`text-sm ${pixExpirado ? 'text-destructive' : 'text-muted-foreground'}`}>
+              <p
+                className={`text-sm ${
+                  pixExpirado ? 'text-destructive' : 'text-muted-foreground'
+                }`}
+              >
                 {pixExpirado
                   ? '⚠️ Este PIX expirou. Volte e gere novamente.'
                   : `Expira em: ${formatarDataHora(pixExpiresAt)}`}
               </p>
             )}
 
-            {/* QR por imagem base64 (melhor UX) */}
             {pixQrCodeBase64 ? (
               <div className="flex items-center justify-center">
                 <img
@@ -277,7 +294,6 @@ const OrderConfirmedPage = () => {
               </div>
             ) : null}
 
-            {/* Copia e cola */}
             {pixQrCode ? (
               <div className="space-y-2">
                 <p className="text-sm font-medium">PIX Copia e Cola</p>
