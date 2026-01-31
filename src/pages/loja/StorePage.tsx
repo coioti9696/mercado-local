@@ -1,6 +1,6 @@
 import { useParams, useNavigate } from 'react-router-dom';
-import { useEffect, useState } from 'react';
-import { supabase } from '@/lib/supabase';
+import { useEffect, useMemo, useState } from 'react';
+import { supabaseGuest, getOrCreateGuestToken } from '@/lib/supabase';
 import { ProductCard } from '@/components/ProductCard';
 import { useCart } from '@/contexts/CartContext';
 import { Button } from '@/components/ui/button';
@@ -51,6 +51,9 @@ const StorePage = () => {
   const navigate = useNavigate();
   const { itemCount, total } = useCart();
 
+  // ✅ Token do cliente (sem login) — chave para RLS + histórico
+  const guestToken = useMemo(() => getOrCreateGuestToken(), []);
+
   const [producer, setProducer] = useState<StoreProducer | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [todayOrders, setTodayOrders] = useState<Order[]>([]);
@@ -63,82 +66,128 @@ const StorePage = () => {
     const loadStore = async () => {
       if (!slug) return;
 
+      setLoading(true);
+
       try {
-        // PRODUTOR
-        const { data: produtor } = await supabase
+        // PRODUTOR (public)
+        const { data: produtor, error: prodErr } = await supabaseGuest
           .from('produtores')
           .select('*')
           .eq('slug', slug)
           .single();
 
-        if (!produtor) return;
+        if (prodErr || !produtor) {
+          console.error('Erro ao carregar produtor:', prodErr);
+          setProducer(null);
+          return;
+        }
 
-        // ✅ GARANTE QUE A DESCRIÇÃO ENTRA NO STATE DO PRODUCER
         setProducer({
           ...produtor,
-          descricao: produtor.descricao || '', // <-- ajuste (sem mexer no resto)
+          descricao: produtor.descricao || '',
           logo_url: gerarUrlPublica(produtor.logo_url),
           capa_url: gerarUrlPublica(produtor.capa_url),
         });
 
-        // PRODUTOS
-        const { data: produtos } = await supabase
+        // PRODUTOS (public)
+        const { data: produtos, error: produtosErr } = await supabaseGuest
           .from('produtos')
           .select('*')
           .eq('produtor_id', produtor.id)
           .eq('ativo', true)
           .order('created_at', { ascending: false });
 
-        setProducts(
-          (produtos || []).map((p) => ({
-            id: p.id,
-            name: p.nome,
-            description: p.descricao || '',
-            price: p.preco,
-            producerId: p.produtor_id,
-            unit: 'unidade',
-            image: p.imagem_url ? gerarUrlPublica(p.imagem_url) : '',
-            isActive: p.ativo,
-            stock: p.estoque,
-          }))
-        );
+        if (produtosErr) {
+          console.error('Erro ao carregar produtos:', produtosErr);
+          setProducts([]);
+        } else {
+          setProducts(
+            (produtos || []).map((p: any) => ({
+              id: p.id,
+              name: p.nome,
+              description: p.descricao || '',
+              price: p.preco,
+              producerId: p.produtor_id,
+              unit: 'unidade',
+              image: p.imagem_url ? gerarUrlPublica(p.imagem_url) : '',
+              isActive: p.ativo,
+              stock: p.estoque,
+            }))
+          );
+        }
 
-        // PEDIDOS DO CLIENTE HOJE
+        // PEDIDOS DO CLIENTE HOJE (public, porém restrito por guest_token)
         const hoje = new Date().toISOString().split('T')[0];
 
-        const { data: pedidos } = await supabase
+        const { data: pedidos, error: pedidosErr } = await supabaseGuest
           .from('pedidos')
           .select('id, numero_pedido, status, created_at, total')
           .eq('produtor_id', produtor.id)
+          .eq('guest_token', guestToken) // ✅ chave do “meus pedidos”
           .gte('created_at', `${hoje}T00:00:00`)
           .order('created_at', { ascending: false });
 
-        setTodayOrders(pedidos || []);
+        if (pedidosErr) {
+          console.error('Erro ao carregar pedidos do dia:', pedidosErr);
+          setTodayOrders([]);
+        } else {
+          setTodayOrders((pedidos || []) as Order[]);
+        }
       } finally {
         setLoading(false);
       }
     };
 
     loadStore();
-  }, [slug]);
+  }, [slug, guestToken]);
 
   // ===============================
-  // ACTIONS
+  // ACTIONS (cliente sem login)
   // ===============================
   const cancelarPedido = async (id: string) => {
-    await supabase.from('pedidos').update({ status: 'cancelado' }).eq('id', id);
+    try {
+      const { error } = await supabaseGuest
+        .from('pedidos')
+        .update({ status: 'cancelado' })
+        .eq('id', id)
+        .eq('guest_token', guestToken); // ✅ garante que é do cliente
 
-    toast.success('Pedido cancelado');
-    setTodayOrders((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, status: 'cancelado' } : p))
-    );
+      if (error) {
+        console.error('Erro ao cancelar pedido:', error);
+        toast.error('Não foi possível cancelar este pedido.');
+        return;
+      }
+
+      toast.success('Pedido cancelado');
+      setTodayOrders((prev) =>
+        prev.map((p) => (p.id === id ? { ...p, status: 'cancelado' } : p))
+      );
+    } catch (e) {
+      console.error(e);
+      toast.error('Erro ao cancelar pedido');
+    }
   };
 
   const excluirPedido = async (id: string) => {
-    await supabase.from('pedidos').delete().eq('id', id);
+    try {
+      const { error } = await supabaseGuest
+        .from('pedidos')
+        .delete()
+        .eq('id', id)
+        .eq('guest_token', guestToken); // ✅ garante que é do cliente
 
-    toast.success('Pedido excluído');
-    setTodayOrders((prev) => prev.filter((p) => p.id !== id));
+      if (error) {
+        console.error('Erro ao excluir pedido:', error);
+        toast.error('Não foi possível excluir este pedido.');
+        return;
+      }
+
+      toast.success('Pedido excluído');
+      setTodayOrders((prev) => prev.filter((p) => p.id !== id));
+    } catch (e) {
+      console.error(e);
+      toast.error('Erro ao excluir pedido');
+    }
   };
 
   if (loading) {
@@ -178,7 +227,6 @@ const StorePage = () => {
             {producer.cidade}, {producer.estado}
           </p>
 
-          {/* ✅ DESCRIÇÃO ABAIXO DA CIDADE */}
           {!!producer.descricao?.trim() && (
             <p className="mt-3 text-sm text-muted-foreground">
               {producer.descricao}
