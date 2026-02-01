@@ -20,13 +20,17 @@ interface StoreProducer {
   id: string;
   nome_loja: string;
   slug: string;
-  email: string;
   cidade?: string;
   estado?: string;
   telefone?: string;
   logo_url?: string;
   capa_url?: string;
   descricao?: string;
+  cor_principal?: string;
+  aceita_pix?: boolean;
+  aceita_dinheiro?: boolean;
+  aceita_cartao?: boolean;
+  ativo?: boolean;
 }
 
 interface Order {
@@ -40,6 +44,7 @@ interface Order {
 const gerarUrlPublica = (url?: string) => {
   if (!url) return '';
   if (url.startsWith('http')) return url;
+
   return `https://tesmnievlurbrsciocmx.supabase.co/storage/v1/object/public/${url.replace(
     '/storage/v1/object/public/',
     ''
@@ -69,18 +74,25 @@ const StorePage = () => {
       setLoading(true);
 
       try {
-        // PRODUTOR (public)
+        // ✅ PRODUTOR (PUBLIC) — usa VIEW segura (não vaza tokens/infos sensíveis)
         const { data: produtor, error: prodErr } = await supabaseGuest
-          .from('produtores')
-          .select('*')
+          .from('produtores_public')
+          .select(
+            'id, nome_loja, slug, cidade, estado, telefone, logo_url, capa_url, descricao, cor_principal, aceita_pix, aceita_dinheiro, aceita_cartao, ativo'
+          )
           .eq('slug', slug)
-          .single();
+          .maybeSingle();
 
         if (prodErr || !produtor) {
           console.error('Erro ao carregar produtor:', prodErr);
           setProducer(null);
+          setProducts([]);
+          setTodayOrders([]);
           return;
         }
+
+        // se quiser bloquear loja inativa:
+        // if (produtor.ativo === false) { setProducer(null); return; }
 
         setProducer({
           ...produtor,
@@ -89,7 +101,7 @@ const StorePage = () => {
           capa_url: gerarUrlPublica(produtor.capa_url),
         });
 
-        // PRODUTOS (public)
+        // ✅ PRODUTOS (public) — tabela produtos já está com RLS correto por produtor_id
         const { data: produtos, error: produtosErr } = await supabaseGuest
           .from('produtos')
           .select('*')
@@ -116,14 +128,14 @@ const StorePage = () => {
           );
         }
 
-        // PEDIDOS DO CLIENTE HOJE (public, porém restrito por guest_token)
+        // ✅ PEDIDOS DO CLIENTE HOJE (public, porém restrito por guest_token)
         const hoje = new Date().toISOString().split('T')[0];
 
         const { data: pedidos, error: pedidosErr } = await supabaseGuest
           .from('pedidos')
           .select('id, numero_pedido, status, created_at, total')
           .eq('produtor_id', produtor.id)
-          .eq('guest_token', guestToken) // ✅ chave do “meus pedidos”
+          .eq('guest_token', guestToken)
           .gte('created_at', `${hoje}T00:00:00`)
           .order('created_at', { ascending: false });
 
@@ -150,7 +162,7 @@ const StorePage = () => {
         .from('pedidos')
         .update({ status: 'cancelado' })
         .eq('id', id)
-        .eq('guest_token', guestToken); // ✅ garante que é do cliente
+        .eq('guest_token', guestToken);
 
       if (error) {
         console.error('Erro ao cancelar pedido:', error);
@@ -174,7 +186,7 @@ const StorePage = () => {
         .from('pedidos')
         .delete()
         .eq('id', id)
-        .eq('guest_token', guestToken); // ✅ garante que é do cliente
+        .eq('guest_token', guestToken);
 
       if (error) {
         console.error('Erro ao excluir pedido:', error);
