@@ -62,14 +62,31 @@ export const supabase = createClient(supabaseUrl!, supabaseAnonKey!, {
 // =====================
 // SUPABASE GUEST (loja/checkout/histórico sem login)
 // - Não usa sessão
+// - Nunca lê localStorage (evita virar authenticated sem querer)
 // - Sempre envia x-guest-token
 // =====================
+
+const memoryStorage = (() => {
+  let store: Record<string, string> = {}
+  return {
+    getItem: (key: string) => (key in store ? store[key] : null),
+    setItem: (key: string, value: string) => {
+      store[key] = value
+    },
+    removeItem: (key: string) => {
+      delete store[key]
+    },
+  }
+})()
+
 export const supabaseGuest = createClient(supabaseUrl!, supabaseAnonKey!, {
   auth: {
     persistSession: false,
     autoRefreshToken: false,
     detectSessionInUrl: false,
     flowType: 'pkce',
+    storage: memoryStorage as any,
+    storageKey: 'ml_guest_auth', // evita colisão com o supabase normal
   },
   global: {
     headers: {
@@ -79,24 +96,3 @@ export const supabaseGuest = createClient(supabaseUrl!, supabaseAnonKey!, {
   },
 })
 
-// Se em algum momento você quiser “resetar” o token do cliente:
-export function resetGuestToken() {
-  try {
-    localStorage.removeItem(GUEST_TOKEN_KEY)
-    return getOrCreateGuestToken()
-  } catch {
-    return getOrCreateGuestToken()
-  }
-}
-
-// (Opcional) helper de teste — não use em produção para tabela sensível se RLS estiver ativa.
-export const testConnection = async () => {
-  try {
-    const { error } = await supabase.from('produtores').select('id').limit(1)
-    if (error) throw error
-    return true
-  } catch (error) {
-    console.error('❌ Erro na conexão com Supabase:', error)
-    return false
-  }
-}
