@@ -74,9 +74,9 @@ const StorePage = () => {
       setLoading(true);
 
       try {
-        // ✅ PRODUTOR (PUBLIC) — usa VIEW segura (não vaza tokens/infos sensíveis)
+        // ✅ PRODUTOR (PUBLIC) — usa VIEW segura (produtores_public)
         const { data: produtor, error: prodErr } = await supabaseGuest
-          .from('produtores_public_v2')      
+          .from('produtores_public') // ✅ AQUI: era produtores_public_v2
           .select(
             'id, nome_loja, slug, cidade, estado, telefone, logo_url, capa_url, descricao, cor_principal, aceita_pix, aceita_dinheiro, aceita_cartao, ativo'
           )
@@ -90,9 +90,6 @@ const StorePage = () => {
           setTodayOrders([]);
           return;
         }
-
-        // se quiser bloquear loja inativa:
-        // if (produtor.ativo === false) { setProducer(null); return; }
 
         setProducer({
           ...produtor,
