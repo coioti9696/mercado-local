@@ -4,7 +4,16 @@ import { supabaseGuest, getOrCreateGuestToken } from '@/lib/supabase';
 import { ProductCard } from '@/components/ProductCard';
 import { useCart } from '@/contexts/CartContext';
 import { Button } from '@/components/ui/button';
-import { ShoppingBag, MapPin, History, Trash2, XCircle } from 'lucide-react';
+import {
+  ShoppingBag,
+  MapPin,
+  History,
+  Trash2,
+  XCircle,
+  Phone,
+  CreditCard,
+  Banknote,
+} from 'lucide-react';
 import {
   Sheet,
   SheetContent,
@@ -51,6 +60,47 @@ const gerarUrlPublica = (url?: string) => {
   )}`;
 };
 
+// =====================
+// Helpers de UI (somente visual)
+// =====================
+const formatPhoneForDisplay = (raw?: string) => {
+  if (!raw) return '';
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length === 11) return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
+  if (digits.length === 10) return `(${digits.slice(0, 2)}) ${digits.slice(2, 6)}-${digits.slice(6)}`;
+  return raw;
+};
+
+const parseDescricaoEmBlocos = (text?: string) => {
+  const t = (text || '').trim();
+  if (!t) return [];
+
+  const normalized = t.replace(/\r\n/g, '\n').replace(/\n{3,}/g, '\n\n');
+  let blocks = normalized.split('\n\n').map((b) => b.trim()).filter(Boolean);
+
+  // Se vier tudo em uma linha longa, tenta dividir em frases de forma leve
+  if (blocks.length === 1) {
+    const one = blocks[0];
+    const hasBullets = /(^|\n)\s*[-•]/.test(one);
+    if (!hasBullets && one.length > 180) {
+      blocks = one
+        .split(/(?<=[.!?])\s+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+    }
+  }
+
+  return blocks;
+};
+
+const isBulletBlock = (block: string) => {
+  const lines = block.split('\n').map((l) => l.trim()).filter(Boolean);
+  if (lines.length < 2) return false;
+  return lines.every((l) => l.startsWith('- ') || l.startsWith('• '));
+};
+
+const stripBulletPrefix = (line: string) => line.replace(/^[-•]\s+/, '').trim();
+
 const StorePage = () => {
   const { slug } = useParams<{ slug: string }>();
   const navigate = useNavigate();
@@ -76,7 +126,7 @@ const StorePage = () => {
       try {
         // ✅ PRODUTOR (PUBLIC) — usa VIEW segura (produtores_public)
         const { data: produtor, error: prodErr } = await supabaseGuest
-          .from('produtores_public') // ✅ AQUI: era produtores_public_v2
+          .from('produtores_public')
           .select(
             'id, nome_loja, slug, cidade, estado, telefone, logo_url, capa_url, descricao, cor_principal, aceita_pix, aceita_dinheiro, aceita_cartao, ativo'
           )
@@ -98,7 +148,7 @@ const StorePage = () => {
           capa_url: gerarUrlPublica(produtor.capa_url),
         });
 
-        // ✅ PRODUTOS (public) — tabela produtos já está com RLS correto por produtor_id
+        // ✅ PRODUTOS (public)
         const { data: produtos, error: produtosErr } = await supabaseGuest
           .from('produtos')
           .select('*')
@@ -125,7 +175,7 @@ const StorePage = () => {
           );
         }
 
-        // ✅ PEDIDOS DO CLIENTE HOJE (public, porém restrito por guest_token)
+        // ✅ PEDIDOS DO CLIENTE HOJE
         const hoje = new Date().toISOString().split('T')[0];
 
         const { data: pedidos, error: pedidosErr } = await supabaseGuest
@@ -149,6 +199,16 @@ const StorePage = () => {
 
     loadStore();
   }, [slug, guestToken]);
+
+  const descricaoBlocks = useMemo(
+    () => parseDescricaoEmBlocos(producer?.descricao),
+    [producer?.descricao]
+  );
+
+  const telefoneDisplay = useMemo(
+    () => formatPhoneForDisplay(producer?.telefone),
+    [producer?.telefone]
+  );
 
   // ===============================
   // ACTIONS (cliente sem login)
@@ -236,12 +296,104 @@ const StorePage = () => {
             {producer.cidade}, {producer.estado}
           </p>
 
-          {!!producer.descricao?.trim() && (
-            <p className="mt-3 text-sm text-muted-foreground">
-              {producer.descricao}
-            </p>
-          )}
+          {/* ✅ BLOCO ELEGANTE (automatico) — sempre acima do botão */}
+          <div className="mt-4 max-w-2xl mx-auto">
+            {/* Cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-left">
+              <div className="bg-background/70 backdrop-blur rounded-xl border p-4">
+                <div className="text-sm font-semibold mb-2">
+                  Formas de pagamento
+                </div>
 
+                <div className="flex flex-wrap gap-2 text-sm">
+                  <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full border bg-background">
+                    <CreditCard className="w-4 h-4" />
+                    Pix: <b className="ml-1">{producer.aceita_pix ? 'Sim' : 'Não'}</b>
+                  </span>
+
+                  <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full border bg-background">
+                    <CreditCard className="w-4 h-4" />
+                    Cartão:{' '}
+                    <b className="ml-1">{producer.aceita_cartao ? 'Sim' : 'Não'}</b>
+                  </span>
+
+                  <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full border bg-background">
+                    <Banknote className="w-4 h-4" />
+                    Dinheiro:{' '}
+                    <b className="ml-1">{producer.aceita_dinheiro ? 'Sim' : 'Não'}</b>
+                  </span>
+                </div>
+              </div>
+
+              <div className="bg-background/70 backdrop-blur rounded-xl border p-4">
+                <div className="text-sm font-semibold mb-2">Contato</div>
+
+                {telefoneDisplay ? (
+                  <div className="text-sm text-muted-foreground flex items-center gap-2">
+                    <Phone className="w-4 h-4" />
+                    WhatsApp:{' '}
+                    <span className="font-medium text-foreground">
+                      {telefoneDisplay}
+                    </span>
+                  </div>
+                ) : (
+                  <div className="text-sm text-muted-foreground">
+                    Contato não informado
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Descrição formatada automaticamente (sem bagunçar layout) */}
+            {descricaoBlocks.length > 0 && (
+              <div className="mt-4 bg-background/70 backdrop-blur rounded-xl border p-4 text-left">
+                <div className="text-sm font-semibold mb-2">Sobre a loja</div>
+
+                <div className="space-y-3 text-sm text-muted-foreground">
+                  {descricaoBlocks.map((block, idx) => {
+                    // bloco inteiro em bullets
+                    if (isBulletBlock(block)) {
+                      const lines = block.split('\n').map((l) => l.trim()).filter(Boolean);
+                      return (
+                        <ul key={idx} className="list-disc pl-5 space-y-1">
+                          {lines.map((l, i) => (
+                            <li key={i}>{stripBulletPrefix(l)}</li>
+                          ))}
+                        </ul>
+                      );
+                    }
+
+                    // bullets misturados com texto
+                    const hasInlineBullets =
+                      block.includes('\n- ') || block.includes('\n• ');
+
+                    if (hasInlineBullets) {
+                      const lines = block.split('\n').map((l) => l.trim()).filter(Boolean);
+                      return (
+                        <div key={idx} className="space-y-2">
+                          {lines.map((l, i) => {
+                            const isB = l.startsWith('- ') || l.startsWith('• ');
+                            return isB ? (
+                              <div key={i} className="flex gap-2">
+                                <span className="mt-1">•</span>
+                                <span>{stripBulletPrefix(l)}</span>
+                              </div>
+                            ) : (
+                              <p key={i}>{l}</p>
+                            );
+                          })}
+                        </div>
+                      );
+                    }
+
+                    return <p key={idx}>{block}</p>;
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* ✅ NÃO MEXE NO BOTÃO / HISTÓRICO */}
           <Sheet>
             <SheetTrigger asChild>
               <Button variant="outline" size="sm" className="mt-3">
