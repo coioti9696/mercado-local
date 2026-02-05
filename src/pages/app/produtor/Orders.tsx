@@ -51,7 +51,6 @@ const mapStatus = (status: string): OrderStatus => {
 
 /* =========================
    TROCO (LÊ DE observacoes)
-   - Detecta padrões comuns: "Troco", "troco:", "R$"
 ========================= */
 const extractTrocoFromNotes = (notes?: string | null) => {
   if (!notes) return null;
@@ -59,34 +58,52 @@ const extractTrocoFromNotes = (notes?: string | null) => {
   const text = notes.trim();
   if (!text) return null;
 
-  // tenta achar "troco" e pegar o valor depois
-  // exemplos aceitos:
-  // "Troco: 50"
-  // "troco 50"
-  // "Precisa de troco: R$ 50,00"
-  // "Troco para 100"
   const lower = text.toLowerCase();
   if (!lower.includes('troco')) return null;
 
-  // pega primeiro número que aparecer depois da palavra troco
   const idx = lower.indexOf('troco');
   const after = text.slice(idx);
 
-  // número com vírgula/ponto
   const match = after.match(/(\d{1,6}(?:[.,]\d{1,2})?)/);
   if (!match) return 'Sim';
 
-  // normaliza para "R$ xx,xx"
   const raw = match[1].replace('.', '').replace(',', '.');
   const value = Number(raw);
   if (Number.isNaN(value)) return 'Sim';
 
-  const formatted = new Intl.NumberFormat('pt-BR', {
+  return new Intl.NumberFormat('pt-BR', {
     style: 'currency',
     currency: 'BRL',
   }).format(value);
+};
 
-  return formatted;
+const formatMoney = (value: number) =>
+  new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(
+    value || 0
+  );
+
+/**
+ * ✅ AQUI ESTÁ O PULO DO GATO:
+ * Pegamos o tipo real do item direto do seu Order em @/types,
+ * pra não bater de frente com o TS.
+ */
+type OrderItems = NonNullable<Order['items']>;
+type OrderItem = OrderItems extends Array<infer T> ? T : never;
+
+/**
+ * Resultado do select do Supabase (pedido_itens + produtos)
+ * (tipagem local só pra facilitar o merge)
+ */
+type PedidoItemRow = {
+  pedido_id: string;
+  quantidade: number;
+  preco_unitario: number;
+  total_item: number | null;
+  produtos: {
+    id: string;
+    nome: string;
+    imagem_url: string | null;
+  } | null;
 };
 
 export default function ProducerOrders() {
@@ -104,48 +121,123 @@ export default function ProducerOrders() {
       setLoading(true);
 
       try {
-        const { data, error } = await supabase
+        // 1) PEDIDOS
+        const { data: pedidosDb, error: pedidosErr } = await supabase
           .from('pedidos')
           .select('*')
           .eq('produtor_id', producer.id)
           .order('created_at', { ascending: false });
 
-        if (error) throw error;
+        if (pedidosErr) throw pedidosErr;
 
-        const pedidosFormatados: Order[] = (data || []).map((pedido) => ({
-          id: pedido.numero_pedido || pedido.id,
-          producerId: pedido.produtor_id,
-          producerName: producer.name,
-          customerName: pedido.cliente_nome || 'Cliente',
-          customerPhone: pedido.cliente_telefone || '',
-          customerEmail: pedido.cliente_email,
+        const rows = pedidosDb || [];
+        const pedidoUuids = rows.map((p) => p.id as string);
 
-          /* ✅ ENDEREÇO COMPLETO (STRING) */
-          customerAddress: [
-            pedido.cliente_endereco,
-            pedido.cliente_numero && `nº ${pedido.cliente_numero}`,
-            pedido.cliente_bairro,
-            pedido.cliente_cidade,
-            pedido.cliente_cep,
-          ]
-            .filter(Boolean)
-            .join(', '),
+        // Map: pedido_uuid -> display id (#numero_pedido ou uuid)
+        const displayIdByPedidoUuid: Record<string, string> = {};
+        for (const p of rows) {
+          displayIdByPedidoUuid[p.id] = p.numero_pedido || p.id;
+        }
 
-          status: mapStatus(pedido.status),
-          paymentMethod: pedido.metodo_pagamento,
-          total: Number(pedido.total) || 0,
-          subtotal: Number(pedido.subtotal) || 0,
-          deliveryFee: Number(pedido.taxa_entrega) || 0,
-          deliveryMethod: pedido.metodo_entrega,
-          deliveryDate: pedido.data_entrega,
-          deliveryTime: pedido.horario_entrega,
-          notes: pedido.observacoes,
-          paymentStatus: pedido.status_pagamento,
-          paymentId: pedido.id_pagamento,
-          createdAt: new Date(pedido.created_at),
-          updatedAt: new Date(pedido.updated_at || pedido.created_at),
-          items: [],
-        }));
+        // 2) ITENS
+        const itensPorDisplayId: Record<string, OrderItem[]> = {};
+
+        if (pedidoUuids.length > 0) {
+          const { data: itensDb, error: itensErr } = await supabase
+            .from('pedido_itens')
+            .select(
+              `
+              pedido_id,
+              quantidade,
+              preco_unitario,
+              total_item,
+              produtos (
+                id,
+                nome,
+                imagem_url
+              )
+            `
+            )
+            .in('pedido_id', pedidoUuids);
+
+          if (itensErr) {
+            console.error('Erro ao carregar itens do pedido:', itensErr);
+          } else {
+            const itens = (itensDb || []) as unknown as PedidoItemRow[];
+
+            for (const it of itens) {
+              const displayId = displayIdByPedidoUuid[it.pedido_id];
+              if (!displayId) continue;
+
+              if (!itensPorDisplayId[displayId]) itensPorDisplayId[displayId] = [];
+
+              const nome = it.produtos?.nome || 'Produto';
+              const unitPrice = Number(it.preco_unitario) || 0;
+              const quantity = Number(it.quantidade) || 0;
+              const total =
+                typeof it.total_item === 'number'
+                  ? Number(it.total_item)
+                  : unitPrice * quantity;
+
+              /**
+               * ✅ Montamos o objeto no formato "mais provável"
+               * e tipamos como OrderItem sem forçar alterações no seu @/types.
+               * Se seu OrderItem tiver campos extras, não quebra.
+               */
+              const item = {
+                name: nome,
+                quantity,
+                unitPrice,
+                total,
+                image: it.produtos?.imagem_url || undefined,
+                productId: it.produtos?.id,
+              } as unknown as OrderItem;
+
+              itensPorDisplayId[displayId].push(item);
+            }
+          }
+        }
+
+        // 3) FORMATAÇÃO
+        const pedidosFormatados: Order[] = rows.map((pedido) => {
+          const displayId = pedido.numero_pedido || pedido.id;
+
+          return {
+            id: displayId,
+            producerId: pedido.produtor_id,
+            producerName: producer.name,
+            customerName: pedido.cliente_nome || 'Cliente',
+            customerPhone: pedido.cliente_telefone || '',
+            customerEmail: pedido.cliente_email,
+
+            customerAddress: [
+              pedido.cliente_endereco,
+              pedido.cliente_numero && `nº ${pedido.cliente_numero}`,
+              pedido.cliente_bairro,
+              pedido.cliente_cidade,
+              pedido.cliente_cep,
+            ]
+              .filter(Boolean)
+              .join(', '),
+
+            status: mapStatus(pedido.status),
+            paymentMethod: pedido.metodo_pagamento,
+            total: Number(pedido.total) || 0,
+            subtotal: Number(pedido.subtotal) || 0,
+            deliveryFee: Number(pedido.taxa_entrega) || 0,
+            deliveryMethod: pedido.metodo_entrega,
+            deliveryDate: pedido.data_entrega,
+            deliveryTime: pedido.horario_entrega,
+            notes: pedido.observacoes,
+            paymentStatus: pedido.status_pagamento,
+            paymentId: pedido.id_pagamento,
+            createdAt: new Date(pedido.created_at),
+            updatedAt: new Date(pedido.updated_at || pedido.created_at),
+
+            // ✅ agora vem com itens
+            items: (itensPorDisplayId[displayId] || []) as unknown as OrderItems,
+          };
+        });
 
         setPedidos(pedidosFormatados);
       } catch (err) {
@@ -159,7 +251,6 @@ export default function ProducerOrders() {
     buscarPedidos();
   }, [producer?.id]);
 
-  /* ✅ FILTRO FUNCIONANDO */
   const pedidosFiltrados =
     statusSelecionado === 'all'
       ? pedidos
@@ -231,6 +322,14 @@ export default function ProducerOrders() {
             {pedidosFiltrados.map((pedido) => {
               const troco = extractTrocoFromNotes(pedido.notes);
 
+              // render: usamos "unknown" pra não depender do shape exato do seu OrderItem
+              const itens = (pedido.items || []) as unknown as Array<{
+                name?: string;
+                quantity?: number;
+                unitPrice?: number;
+                total?: number;
+              }>;
+
               return (
                 <div key={pedido.id} className="border rounded-xl p-4">
                   <div className="flex justify-between mb-2">
@@ -259,7 +358,6 @@ export default function ProducerOrders() {
                       })}
                     </div>
 
-                    {/* ✅ TROCO */}
                     {troco && (
                       <div className="flex gap-2">
                         <span className="w-4 h-4" />
@@ -273,6 +371,48 @@ export default function ProducerOrders() {
                     )}
                   </div>
 
+                  {/* ✅ ITENS */}
+                  <div className="mt-3 rounded-lg bg-secondary/40 p-3">
+                    <p className="text-sm font-semibold text-foreground mb-2">
+                      Itens do pedido
+                    </p>
+
+                    {itens.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">
+                        Nenhum item encontrado para este pedido.
+                      </p>
+                    ) : (
+                      <div className="space-y-2">
+                        {itens.map((it, idx) => (
+                          <div
+                            key={`${pedido.id}-item-${idx}`}
+                            className="flex items-start justify-between gap-3"
+                          >
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium text-foreground truncate">
+                                {(it.quantity ?? 0)}x {it.name || 'Produto'}
+                              </p>
+                              <p className="text-xs text-muted-foreground">
+                                {formatMoney(Number(it.unitPrice) || 0)} un.
+                              </p>
+                            </div>
+
+                            <div className="text-sm font-semibold text-foreground whitespace-nowrap">
+                              {formatMoney(Number(it.total) || 0)}
+                            </div>
+                          </div>
+                        ))}
+
+                        <div className="border-t pt-2 mt-2 flex justify-between text-sm">
+                          <span className="text-muted-foreground">Total</span>
+                          <span className="font-semibold text-foreground">
+                            {formatMoney(Number(pedido.total) || 0)}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
                   <div className="border-t mt-3 pt-3 flex flex-wrap gap-2">
                     {acoesStatus.map((acao) => {
                       const Icon = acao.icon;
@@ -281,9 +421,7 @@ export default function ProducerOrders() {
                           key={acao.status}
                           size="sm"
                           disabled={pedido.status === acao.status}
-                          onClick={() =>
-                            handleMudarStatus(pedido.id, acao.status)
-                          }
+                          onClick={() => handleMudarStatus(pedido.id, acao.status)}
                           className="gap-1.5"
                         >
                           <Icon className="w-4 h-4" />

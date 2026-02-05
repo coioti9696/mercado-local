@@ -35,8 +35,37 @@ const json = (payload: unknown, status = 200) =>
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
 
-// ✅ Centralize aqui o redirect do convite.
-const INVITE_REDIRECT_TO = "http://localhost:8080/convite";
+// ✅ Redirect do convite (PRODUÇÃO)
+// - Se INVITE_REDIRECT_TO existir em Secrets, usa
+// - Se não existir, usa fallback pro seu Vercel
+const INVITE_REDIRECT_TO =
+  (Deno.env.get("INVITE_REDIRECT_TO") || "").trim() ||
+  "https://mercado-local-sepia.vercel.app/convite";
+
+function extractToken(req: Request) {
+  // 1) Authorization: Bearer <token>
+  const authHeader =
+    req.headers.get("authorization") ||
+    req.headers.get("Authorization") ||
+    "";
+
+  let token = "";
+  if (authHeader.toLowerCase().startsWith("bearer ")) {
+    token = authHeader.slice(7).trim();
+  } else {
+    token = authHeader.trim();
+  }
+
+  // 2) fallback: x-supabase-auth
+  if (!token) {
+    token = (req.headers.get("x-supabase-auth") || "").trim();
+  }
+
+  // evita token com aspas (alguns clientes podem enviar)
+  token = token.replace(/^"+|"+$/g, "").trim();
+
+  return token;
+}
 
 serve(async (req) => {
   try {
@@ -49,84 +78,56 @@ serve(async (req) => {
       return json({ error: "Método não permitido" }, 405);
     }
 
-    const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
-    const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-    const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY");
+    // ✅ PATCH PROFISSIONAL (estável):
+    // Use SOMENTE os secrets oficiais que você controla.
+    // Não use fallback em SUPABASE_* para não pegar valor errado.
+    const SUPABASE_URL = (Deno.env.get("PROJECT_URL") || "").trim();
+    const SUPABASE_ANON_KEY = (Deno.env.get("ANON_KEY") || "").trim();
+    const SERVICE_ROLE_KEY = (Deno.env.get("SERVICE_ROLE_KEY") || "").trim();
 
-    if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
+    if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !SERVICE_ROLE_KEY) {
       return json(
-        { error: "Secrets ausentes (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY)" },
-        500
-      );
-    }
-
-    if (!SUPABASE_ANON_KEY) {
-      return json(
-        { error: "Secret ausente: SUPABASE_ANON_KEY (necessário para fallback JWT)" },
-        500
-      );
-    }
-
-    // ✅ Client com Service Role (poder total)
-    const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
-
-    // ✅ Token do usuário logado (admin) pode vir de Authorization OU x-supabase-auth
-    const authHeader =
-      req.headers.get("authorization") ||
-      req.headers.get("Authorization") ||
-      "";
-
-    const tokenFromAuth = authHeader.toLowerCase().startsWith("bearer ")
-      ? authHeader.slice(7).trim()
-      : authHeader.trim();
-
-    const tokenFromAlt = (req.headers.get("x-supabase-auth") || "").trim();
-    const token = tokenFromAuth || tokenFromAlt;
-
-    if (!token) {
-      return json({ error: "Missing authorization header" }, 401);
-    }
-
-    // ✅ 1) Tenta validar JWT com service role
-    let adminUserId: string | null = null;
-
-    const { data: userData, error: userError } = await admin.auth.getUser(token);
-
-    if (!userError && userData?.user?.id) {
-      adminUserId = userData.user.id;
-    } else {
-      // ✅ 2) Fallback: valida JWT via client token-based com ANON KEY (mais estável em alguns casos)
-      const tokenClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-        global: {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
+        {
+          error:
+            "Secrets ausentes. Verifique PROJECT_URL, ANON_KEY e SERVICE_ROLE_KEY em Edge Functions > Secrets.",
         },
-        auth: { persistSession: false, autoRefreshToken: false },
-      });
-
-      const { data: fallbackData, error: fallbackError } =
-        await tokenClient.auth.getUser();
-
-      if (fallbackError || !fallbackData?.user?.id) {
-        // retorna erro mais informativo (sem vazar token)
-        return json(
-          {
-            error: "Invalid JWT",
-            details: fallbackError?.message || userError?.message || null,
-          },
-          401
-        );
-      }
-
-      adminUserId = fallbackData.user.id;
+        500
+      );
     }
 
-    if (!adminUserId) {
-      return json({ error: "Invalid JWT" }, 401);
+    // ✅ extrai token do admin logado
+    const token = extractToken(req);
+    if (!token) {
+      return json({ error: "Missing authorization token" }, 401);
     }
 
-    // ✅ Verifica se é admin no seu sistema (plano === "admin")
+    // ✅ 1) valida o JWT de forma estável (client ANON + Authorization header)
+    // Se PROJECT_URL/ANON_KEY estiverem corretos, isso para de dar Invalid JWT.
+    const userClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: `Bearer ${token}` } },
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+
+    const { data: userData, error: userError } = await userClient.auth.getUser();
+
+    if (userError || !userData?.user?.id) {
+      return json(
+        {
+          error: "Invalid JWT",
+          details: userError?.message || null,
+        },
+        401
+      );
+    }
+
+    const adminUserId = userData.user.id;
+
+    // ✅ 2) client admin (service role) para convidar + escrever no banco
+    const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+
+    // ✅ valida se é admin no seu sistema
     const { data: adminProfile, error: adminProfileError } = await admin
       .from("produtores")
       .select("id, plano")
@@ -208,7 +209,10 @@ serve(async (req) => {
       return json({ error: insertError.message }, 400);
     }
 
-    return json({ ok: true, user_id: invite.user.id }, 200);
+    return json(
+      { ok: true, user_id: invite.user.id, redirect_to: INVITE_REDIRECT_TO },
+      200
+    );
   } catch (err) {
     console.error(err);
     return json({ error: "Erro interno" }, 500);

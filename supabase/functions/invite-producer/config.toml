@@ -1,1 +1,2 @@
+[functions.invite-producer]
 verify_jwt = false
