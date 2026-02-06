@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useMemo, useEffect, useRef, useState } from 'react';
 import { DashboardLayout } from '@/components/layouts/DashboardLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -16,6 +16,10 @@ import {
   Image as ImageIcon,
   Star,
   X,
+  Search,
+  ArrowUpDown,
+  CheckCircle2,
+  XCircle,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -38,6 +42,9 @@ type ProdutoImagem = {
   url: string;
   ordem?: number;
 };
+
+type FiltroStatus = 'all' | 'ativo' | 'inativo' | 'destaque';
+type Ordenacao = 'newest' | 'oldest' | 'name_az' | 'name_za' | 'price_high' | 'price_low' | 'stock_low';
 
 const ProducerProducts = () => {
   const { producer } = useAuth();
@@ -66,6 +73,11 @@ const ProducerProducts = () => {
   // ✅ Galeria (imagens extras) — tabela produtos_imagens
   const [gallery, setGallery] = useState<ProdutoImagem[]>([]);
 
+  // ✅ Toolbar (busca / filtro / sort)
+  const [search, setSearch] = useState('');
+  const [filtro, setFiltro] = useState<FiltroStatus>('all');
+  const [sort, setSort] = useState<Ordenacao>('newest');
+
   const tiposCogumelos = [
     'Shiitake',
     'Champignon',
@@ -89,6 +101,12 @@ const ProducerProducts = () => {
     const g = Number(peso.replace('g', ''));
     return `${g / 1000} kg`;
   };
+
+  const formatMoney = (value: number) =>
+    new Intl.NumberFormat('pt-BR', {
+      style: 'currency',
+      currency: 'BRL',
+    }).format(value || 0);
 
   const resetForm = () => {
     setEditingId(null);
@@ -163,7 +181,6 @@ const ProducerProducts = () => {
   // IMAGE UPLOAD (MULTI)
   // ===============================
   const uploadFilesToStorage = async (files: File[]) => {
-    // retorna lista de publicUrls
     const urls: string[] = [];
 
     for (const file of files) {
@@ -199,50 +216,41 @@ const ProducerProducts = () => {
     try {
       const uploadedUrls = await uploadFilesToStorage(files);
 
-      // ✅ regra: a primeira vira principal se ainda não tiver principal
       const principalAtual = newProduct.imagem_url?.trim();
       const principal =
-        principalAtual && principalAtual.length > 5
-          ? principalAtual
-          : uploadedUrls[0];
+        principalAtual && principalAtual.length > 5 ? principalAtual : uploadedUrls[0];
 
       const extras =
-        principalAtual && principalAtual.length > 5
-          ? uploadedUrls
-          : uploadedUrls.slice(1);
+        principalAtual && principalAtual.length > 5 ? uploadedUrls : uploadedUrls.slice(1);
 
       if (!principalAtual || principalAtual.length <= 5) {
         setNewProduct((p) => ({ ...p, imagem_url: principal }));
       }
 
       if (extras.length > 0) {
-        setGallery((prev) => [
-          ...prev,
-          ...extras.map((url) => ({ url })),
-        ]);
+        setGallery((prev) => [...prev, ...extras.map((url) => ({ url }))]);
       }
 
-      toast.success(
-        uploadedUrls.length === 1 ? 'Imagem enviada' : 'Imagens enviadas'
-      );
+      toast.success(uploadedUrls.length === 1 ? 'Imagem enviada' : 'Imagens enviadas');
     } catch (e) {
       console.error(e);
       toast.error('Erro ao enviar imagens');
     } finally {
       setUploadingImage(false);
-      // limpa input pra permitir escolher os mesmos arquivos novamente
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
   const setAsPrimary = (url: string) => {
-    // move principal atual pra galeria (se existir), e tira essa url da galeria
     setNewProduct((p) => {
       const oldPrimary = p.imagem_url?.trim();
       const nextPrimary = url;
 
       if (oldPrimary && oldPrimary.length > 5 && oldPrimary !== nextPrimary) {
-        setGallery((prev) => [{ url: oldPrimary }, ...prev.filter((g) => g.url !== nextPrimary)]);
+        setGallery((prev) => [
+          { url: oldPrimary },
+          ...prev.filter((g) => g.url !== nextPrimary),
+        ]);
       } else {
         setGallery((prev) => prev.filter((g) => g.url !== nextPrimary));
       }
@@ -263,20 +271,17 @@ const ProducerProducts = () => {
   // SYNC GALLERY (DB)
   // ===============================
   const syncGalleryInDb = async (produtoId: string) => {
-    // remove duplicatas e não salva a principal na galeria
     const principal = (newProduct.imagem_url || '').trim();
 
     const clean = gallery
       .map((g) => g.url)
       .filter((url) => url && url !== principal);
 
-    // unique mantendo ordem
     const uniqueUrls: string[] = [];
     for (const u of clean) {
       if (!uniqueUrls.includes(u)) uniqueUrls.push(u);
     }
 
-    // Estratégia segura: apaga tudo e reinsere (simples e consistente)
     const { error: delErr } = await supabase
       .from('produtos_imagens')
       .delete()
@@ -292,10 +297,7 @@ const ProducerProducts = () => {
       ordem: idx + 1,
     }));
 
-    const { error: insErr } = await supabase
-      .from('produtos_imagens')
-      .insert(payload);
-
+    const { error: insErr } = await supabase.from('produtos_imagens').insert(payload);
     if (insErr) throw insErr;
   };
 
@@ -334,7 +336,6 @@ const ProducerProducts = () => {
 
         if (updErr) throw updErr;
 
-        // ✅ sincroniza galeria
         await syncGalleryInDb(editingId);
 
         toast.success('Produto atualizado');
@@ -349,7 +350,6 @@ const ProducerProducts = () => {
 
         const newId = data?.id as string;
 
-        // ✅ sincroniza galeria
         await syncGalleryInDb(newId);
 
         toast.success('Produto cadastrado');
@@ -361,6 +361,108 @@ const ProducerProducts = () => {
     } catch (e) {
       console.error(e);
       toast.error('Erro ao salvar produto');
+    }
+  };
+
+  // ===============================
+  // UI: filtros / ordenação / stats
+  // ===============================
+  const stats = useMemo(() => {
+    const total = products.length;
+    const ativos = products.filter((p) => !!p.ativo).length;
+    const inativos = total - ativos;
+    const destaques = products.filter((p) => !!p.destaque).length;
+    return { total, ativos, inativos, destaques };
+  }, [products]);
+
+  const filteredProducts = useMemo(() => {
+    const q = search.trim().toLowerCase();
+
+    let list = [...products];
+
+    // filtro
+    if (filtro === 'ativo') list = list.filter((p) => !!p.ativo);
+    if (filtro === 'inativo') list = list.filter((p) => !p.ativo);
+    if (filtro === 'destaque') list = list.filter((p) => !!p.destaque);
+
+    // busca
+    if (q) {
+      list = list.filter((p) => {
+        const nome = (p.nome || '').toLowerCase();
+        const desc = (p.descricao || '').toLowerCase();
+        return nome.includes(q) || desc.includes(q);
+      });
+    }
+
+    // ordenação
+    list.sort((a, b) => {
+      const aName = (a.nome || '').toLowerCase();
+      const bName = (b.nome || '').toLowerCase();
+      const aPrice = Number(a.preco) || 0;
+      const bPrice = Number(b.preco) || 0;
+      const aStock = Number(a.estoque) || 0;
+      const bStock = Number(b.estoque) || 0;
+
+      const aDate = new Date((a as any).created_at || 0).getTime();
+      const bDate = new Date((b as any).created_at || 0).getTime();
+
+      switch (sort) {
+        case 'oldest':
+          return aDate - bDate;
+        case 'name_az':
+          return aName.localeCompare(bName);
+        case 'name_za':
+          return bName.localeCompare(aName);
+        case 'price_high':
+          return bPrice - aPrice;
+        case 'price_low':
+          return aPrice - bPrice;
+        case 'stock_low':
+          return aStock - bStock;
+        case 'newest':
+        default:
+          return bDate - aDate;
+      }
+    });
+
+    return list;
+  }, [products, filtro, search, sort]);
+
+  const openCreate = () => {
+    resetForm();
+    setIsDialogOpen(true);
+  };
+
+  const openEdit = async (p: ProdutoReal) => {
+    setEditingId(p.id);
+    setNewProduct({
+      nome: p.nome,
+      descricao: p.descricao || '',
+      tipo_cogumelo: p.tipo_cogumelo,
+      peso_disponivel: p.peso_disponivel,
+      preco: String(p.preco),
+      estoque: String(p.estoque),
+      imagem_url: p.imagem_url,
+      ativo: p.ativo,
+      destaque: p.destaque,
+    });
+
+    setIsDialogOpen(true);
+    await loadGalleryForProduct(p.id);
+  };
+
+  const deleteProduct = async (p: ProdutoReal) => {
+    if (!confirm(`Excluir "${p.nome}"?`)) return;
+
+    try {
+      await supabase.from('produtos_imagens').delete().eq('produto_id', p.id);
+      await supabase.from('produtos').delete().eq('id', p.id);
+
+      toast.success('Produto excluído');
+      loadProducts();
+    } catch (e) {
+      console.error(e);
+      toast.error('Erro ao excluir');
     }
   };
 
@@ -377,109 +479,226 @@ const ProducerProducts = () => {
   return (
     <DashboardLayout type="producer">
       <div className="space-y-6">
-        <div className="flex justify-between">
-          <h1 className="text-2xl font-bold">🍄 Produtos</h1>
-          <Button
-            onClick={() => {
-              resetForm();
-              setIsDialogOpen(true);
-            }}
-          >
+        {/* HEADER */}
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="space-y-1">
+            <h1 className="text-2xl font-bold">🍄 Produtos</h1>
+            <p className="text-sm text-muted-foreground">
+              Gerencie seus produtos, estoque e imagens.
+            </p>
+          </div>
+
+          <Button onClick={openCreate} className="sm:w-auto w-full">
             <Plus className="w-4 h-4 mr-2" />
             Novo Produto
           </Button>
         </div>
 
-        {loading ? (
-          <Loader2 className="animate-spin" />
-        ) : products.length === 0 ? (
-          <div className="text-center py-12 border rounded-xl">
-            <Package className="mx-auto mb-4 text-muted-foreground" />
-            Nenhum produto cadastrado
+        {/* STATS + TOOLBAR */}
+        <div className="rounded-2xl border bg-card p-4 shadow-sm">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            {/* Stats */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="rounded-xl border bg-background p-3">
+                <p className="text-xs text-muted-foreground">Total</p>
+                <p className="text-lg font-semibold">{stats.total}</p>
+              </div>
+              <div className="rounded-xl border bg-background p-3">
+                <p className="text-xs text-muted-foreground">Ativos</p>
+                <p className="text-lg font-semibold">{stats.ativos}</p>
+              </div>
+              <div className="rounded-xl border bg-background p-3">
+                <p className="text-xs text-muted-foreground">Inativos</p>
+                <p className="text-lg font-semibold">{stats.inativos}</p>
+              </div>
+              <div className="rounded-xl border bg-background p-3">
+                <p className="text-xs text-muted-foreground">Destaques</p>
+                <p className="text-lg font-semibold">{stats.destaques}</p>
+              </div>
+            </div>
+
+            {/* Toolbar */}
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end sm:min-w-[420px]">
+              <div className="relative w-full">
+                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  className="pl-9"
+                  placeholder="Buscar por nome ou descrição…"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+              </div>
+
+              <Select value={filtro} onValueChange={(v) => setFiltro(v as FiltroStatus)}>
+                <SelectTrigger className="w-full sm:w-[180px]">
+                  <SelectValue placeholder="Filtrar" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todos</SelectItem>
+                  <SelectItem value="ativo">Ativos</SelectItem>
+                  <SelectItem value="inativo">Inativos</SelectItem>
+                  <SelectItem value="destaque">Destaques</SelectItem>
+                </SelectContent>
+              </Select>
+
+              <Select value={sort} onValueChange={(v) => setSort(v as Ordenacao)}>
+                <SelectTrigger className="w-full sm:w-[190px]">
+                  <ArrowUpDown className="w-4 h-4 mr-2" />
+                  <SelectValue placeholder="Ordenar" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="newest">Mais recentes</SelectItem>
+                  <SelectItem value="oldest">Mais antigos</SelectItem>
+                  <SelectItem value="name_az">Nome (A–Z)</SelectItem>
+                  <SelectItem value="name_za">Nome (Z–A)</SelectItem>
+                  <SelectItem value="price_high">Preço (maior)</SelectItem>
+                  <SelectItem value="price_low">Preço (menor)</SelectItem>
+                  <SelectItem value="stock_low">Estoque (baixo)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {products.map((p) => (
-              <div key={p.id} className="border rounded-xl p-4">
-                <div className="aspect-[4/3] rounded-md overflow-hidden mb-2 bg-muted">
-                  <img
-                    src={p.imagem_url}
-                    alt={p.nome}
-                    className="w-full h-full object-cover"
-                  />
-                </div>
+        </div>
 
-                <h3 className="font-semibold">{p.nome}</h3>
-
-                {p.descricao && (
-                  <p className="text-sm text-muted-foreground line-clamp-2 mt-1">
-                    {p.descricao}
-                  </p>
-                )}
-
-                <p className="text-sm font-medium mt-2">
-                  {p.tipo_cogumelo} • {formatPesoKg(p.peso_disponivel)}
-                </p>
-
-                <div className="flex justify-between items-center mt-3">
-                  <span className="font-semibold">R$ {p.preco}</span>
-
-                  <div className="flex gap-2">
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      onClick={async () => {
-                        setEditingId(p.id);
-                        setNewProduct({
-                          nome: p.nome,
-                          descricao: p.descricao || '',
-                          tipo_cogumelo: p.tipo_cogumelo,
-                          peso_disponivel: p.peso_disponivel,
-                          preco: String(p.preco),
-                          estoque: String(p.estoque),
-                          imagem_url: p.imagem_url,
-                          ativo: p.ativo,
-                          destaque: p.destaque,
-                        });
-
-                        setIsDialogOpen(true);
-
-                        // ✅ carrega galeria
-                        await loadGalleryForProduct(p.id);
-                      }}
-                    >
-                      <Pencil className="w-4 h-4" />
-                    </Button>
-
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="text-destructive"
-                      onClick={async () => {
-                        if (!confirm(`Excluir "${p.nome}"?`)) return;
-                        try {
-                          // apaga galeria primeiro (evita ficar lixo)
-                          await supabase
-                            .from('produtos_imagens')
-                            .delete()
-                            .eq('produto_id', p.id);
-
-                          await supabase.from('produtos').delete().eq('id', p.id);
-
-                          toast.success('Produto excluído');
-                          loadProducts();
-                        } catch (e) {
-                          console.error(e);
-                          toast.error('Erro ao excluir');
-                        }
-                      }}
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </Button>
-                  </div>
+        {/* LIST */}
+        {loading ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="rounded-2xl border bg-card p-4 animate-pulse">
+                <div className="aspect-[4/3] rounded-xl bg-muted mb-3" />
+                <div className="h-4 bg-muted rounded w-2/3 mb-2" />
+                <div className="h-3 bg-muted rounded w-full mb-1" />
+                <div className="h-3 bg-muted rounded w-5/6 mb-3" />
+                <div className="flex justify-between">
+                  <div className="h-4 bg-muted rounded w-24" />
+                  <div className="h-8 bg-muted rounded w-20" />
                 </div>
               </div>
             ))}
+          </div>
+        ) : filteredProducts.length === 0 ? (
+          <div className="text-center py-14 border rounded-2xl bg-card">
+            <Package className="mx-auto mb-3 text-muted-foreground" />
+            <p className="font-medium">Nenhum produto encontrado</p>
+            <p className="text-sm text-muted-foreground mt-1">
+              Tente mudar o filtro, a busca, ou cadastre um novo produto.
+            </p>
+            <div className="mt-4">
+              <Button onClick={openCreate}>
+                <Plus className="w-4 h-4 mr-2" />
+                Cadastrar produto
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+            {filteredProducts.map((p) => {
+              const estoque = Number(p.estoque) || 0;
+              const lowStock = estoque > 0 && estoque <= 5;
+
+              return (
+                <div
+                  key={p.id}
+                  className="rounded-2xl border bg-card p-4 shadow-sm hover:shadow-md transition-shadow"
+                >
+                  <div className="aspect-[4/3] rounded-xl overflow-hidden mb-3 bg-muted">
+                    <img
+                      src={p.imagem_url}
+                      alt={p.nome}
+                      className="w-full h-full object-cover"
+                      loading="lazy"
+                    />
+                  </div>
+
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <h3 className="font-semibold text-lg truncate">{p.nome}</h3>
+
+                      {p.descricao && (
+                        <p className="text-sm text-muted-foreground line-clamp-2 mt-1">
+                          {p.descricao}
+                        </p>
+                      )}
+                    </div>
+
+                    {p.destaque && (
+                      <div
+                        className="inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs border bg-background"
+                        title="Destaque"
+                      >
+                        <Star className="w-3.5 h-3.5 text-primary" />
+                        Destaque
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <div className="inline-flex items-center rounded-full border bg-background px-2 py-1 text-xs">
+                      {p.tipo_cogumelo} • {formatPesoKg(p.peso_disponivel)}
+                    </div>
+
+                    <div
+                      className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-xs ${
+                        p.ativo ? 'bg-background' : 'bg-secondary/40'
+                      }`}
+                      title={p.ativo ? 'Produto ativo' : 'Produto inativo'}
+                    >
+                      {p.ativo ? (
+                        <>
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          Ativo
+                        </>
+                      ) : (
+                        <>
+                          <XCircle className="w-3.5 h-3.5" />
+                          Inativo
+                        </>
+                      )}
+                    </div>
+
+                    <div
+                      className={`inline-flex items-center rounded-full border px-2 py-1 text-xs ${
+                        lowStock ? 'bg-destructive/10' : 'bg-background'
+                      }`}
+                      title="Estoque"
+                    >
+                      Estoque: <span className="ml-1 font-semibold">{estoque}</span>
+                      {lowStock ? <span className="ml-1 text-destructive">(baixo)</span> : null}
+                    </div>
+                  </div>
+
+                  <div className="mt-4 flex items-center justify-between">
+                    <div className="space-y-0.5">
+                      <p className="text-xs text-muted-foreground">Preço</p>
+                      <p className="text-lg font-bold text-primary">
+                        {formatMoney(Number(p.preco) || 0)}
+                      </p>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <Button
+                        size="icon"
+                        variant="outline"
+                        onClick={() => openEdit(p)}
+                        title="Editar"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </Button>
+
+                      <Button
+                        size="icon"
+                        variant="outline"
+                        className="text-destructive"
+                        onClick={() => deleteProduct(p)}
+                        title="Excluir"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
 
@@ -493,87 +712,128 @@ const ProducerProducts = () => {
         >
           <DialogContent className="max-h-[90vh] overflow-y-auto">
             <DialogHeader>
-              <DialogTitle>
-                {editingId ? 'Editar Produto' : 'Novo Produto'}
-              </DialogTitle>
+              <DialogTitle>{editingId ? 'Editar Produto' : 'Novo Produto'}</DialogTitle>
             </DialogHeader>
 
-            <div className="space-y-4">
-              <Input
-                placeholder="Nome"
-                value={newProduct.nome}
-                onChange={(e) =>
-                  setNewProduct((p) => ({ ...p, nome: e.target.value }))
-                }
-              />
+            <div className="space-y-5">
+              {/* status (ativo/destaque) */}
+              <div className="rounded-2xl border bg-card p-4">
+                <p className="text-sm font-semibold mb-3">Status do produto</p>
 
-              <Textarea
-                placeholder="Descrição"
-                value={newProduct.descricao}
-                onChange={(e) =>
-                  setNewProduct((p) => ({ ...p, descricao: e.target.value }))
-                }
-              />
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <Button
+                    type="button"
+                    variant={newProduct.ativo ? 'default' : 'outline'}
+                    className="justify-start"
+                    onClick={() => setNewProduct((p) => ({ ...p, ativo: true }))}
+                  >
+                    <CheckCircle2 className="w-4 h-4 mr-2" />
+                    Ativo
+                  </Button>
 
-              <Select
-                value={newProduct.tipo_cogumelo}
-                onValueChange={(v) =>
-                  setNewProduct((p) => ({ ...p, tipo_cogumelo: v }))
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {tiposCogumelos.map((t) => (
-                    <SelectItem key={t} value={t}>
-                      {t}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                  <Button
+                    type="button"
+                    variant={!newProduct.ativo ? 'default' : 'outline'}
+                    className="justify-start"
+                    onClick={() => setNewProduct((p) => ({ ...p, ativo: false }))}
+                  >
+                    <XCircle className="w-4 h-4 mr-2" />
+                    Inativo
+                  </Button>
 
-              <Select
-                value={newProduct.peso_disponivel}
-                onValueChange={(v) =>
-                  setNewProduct((p) => ({ ...p, peso_disponivel: v }))
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {pesosDisponiveis.map((p) => (
-                    <SelectItem key={p} value={p}>
-                      {p}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                  <Button
+                    type="button"
+                    variant={newProduct.destaque ? 'default' : 'outline'}
+                    className="justify-start"
+                    onClick={() => setNewProduct((p) => ({ ...p, destaque: !p.destaque }))}
+                  >
+                    <Star className="w-4 h-4 mr-2" />
+                    {newProduct.destaque ? 'Destaque ON' : 'Marcar destaque'}
+                  </Button>
+                </div>
+              </div>
 
-              <Input
-                placeholder="Preço"
-                value={newProduct.preco}
-                onChange={(e) =>
-                  setNewProduct((p) => ({ ...p, preco: e.target.value }))
-                }
-              />
+              {/* campos */}
+              <div className="rounded-2xl border bg-card p-4 space-y-3">
+                <p className="text-sm font-semibold">Informações</p>
 
-              <Input
-                placeholder="Estoque"
-                value={newProduct.estoque}
-                onChange={(e) =>
-                  setNewProduct((p) => ({ ...p, estoque: e.target.value }))
-                }
-              />
+                <Input
+                  placeholder="Nome"
+                  value={newProduct.nome}
+                  onChange={(e) => setNewProduct((p) => ({ ...p, nome: e.target.value }))}
+                />
+
+                <Textarea
+                  placeholder="Descrição"
+                  value={newProduct.descricao}
+                  onChange={(e) =>
+                    setNewProduct((p) => ({ ...p, descricao: e.target.value }))
+                  }
+                />
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <Select
+                    value={newProduct.tipo_cogumelo}
+                    onValueChange={(v) => setNewProduct((p) => ({ ...p, tipo_cogumelo: v }))}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {tiposCogumelos.map((t) => (
+                        <SelectItem key={t} value={t}>
+                          {t}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+
+                  <Select
+                    value={newProduct.peso_disponivel}
+                    onValueChange={(v) =>
+                      setNewProduct((p) => ({ ...p, peso_disponivel: v }))
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {pesosDisponiveis.map((p) => (
+                        <SelectItem key={p} value={p}>
+                          {p}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <Input
+                    placeholder="Preço"
+                    value={newProduct.preco}
+                    onChange={(e) => setNewProduct((p) => ({ ...p, preco: e.target.value }))}
+                  />
+
+                  <Input
+                    placeholder="Estoque"
+                    value={newProduct.estoque}
+                    onChange={(e) =>
+                      setNewProduct((p) => ({ ...p, estoque: e.target.value }))
+                    }
+                  />
+                </div>
+              </div>
 
               {/* UPLOAD MULTI */}
-              <div className="space-y-2">
+              <div className="rounded-2xl border bg-card p-4 space-y-3">
+                <p className="text-sm font-semibold">Imagens</p>
+
                 <div className="flex gap-2 flex-wrap">
                   <Button
                     variant="outline"
                     onClick={() => fileInputRef.current?.click()}
                     disabled={uploadingImage}
+                    type="button"
                   >
                     <Upload className="w-4 h-4 mr-2" />
                     {uploadingImage ? 'Enviando...' : 'Adicionar imagens'}
@@ -598,12 +858,10 @@ const ProducerProducts = () => {
                   hidden
                   accept="image/*"
                   multiple
-                  onChange={(e) =>
-                    e.target.files && handlePickImages(e.target.files)
-                  }
+                  onChange={(e) => e.target.files && handlePickImages(e.target.files)}
                 />
 
-                {/* PREVIEW PRINCIPAL */}
+                {/* PRINCIPAL */}
                 <div className="border rounded-xl p-3">
                   <div className="flex items-center gap-2 mb-2">
                     <Star className="w-4 h-4 text-primary" />
@@ -612,7 +870,7 @@ const ProducerProducts = () => {
 
                   {newProduct.imagem_url?.trim()?.length > 5 ? (
                     <div className="flex items-center gap-3">
-                      <div className="w-24 h-20 rounded-lg overflow-hidden bg-muted">
+                      <div className="w-28 h-20 rounded-lg overflow-hidden bg-muted border">
                         <img
                           src={newProduct.imagem_url}
                           alt="principal"
@@ -622,7 +880,7 @@ const ProducerProducts = () => {
                       <p className="text-xs text-muted-foreground">
                         Esta é a imagem que aparece primeiro na loja.
                         <br />
-                        Você pode trocar clicando em uma imagem da galeria.
+                        Para trocar, clique em uma imagem da galeria.
                       </p>
                     </div>
                   ) : (
@@ -633,19 +891,17 @@ const ProducerProducts = () => {
                   )}
                 </div>
 
-                {/* PREVIEW GALERIA */}
+                {/* GALERIA */}
                 <div className="border rounded-xl p-3">
                   <div className="flex items-center gap-2 mb-2">
                     <ImageIcon className="w-4 h-4" />
                     <span className="text-sm font-medium">Galeria</span>
-                    <span className="text-xs text-muted-foreground">
-                      ({gallery.length})
-                    </span>
+                    <span className="text-xs text-muted-foreground">({gallery.length})</span>
                   </div>
 
                   {gallery.length === 0 ? (
                     <p className="text-sm text-muted-foreground">
-                      Sem imagens extras. Envie mais de uma para criar um “slide”.
+                      Sem imagens extras. Envie mais de uma para criar um “slide” na loja.
                     </p>
                   ) : (
                     <div className="flex flex-wrap gap-2">
@@ -688,11 +944,7 @@ const ProducerProducts = () => {
             </div>
 
             <DialogFooter>
-              <Button
-                variant="outline"
-                onClick={() => setIsDialogOpen(false)}
-                type="button"
-              >
+              <Button variant="outline" onClick={() => setIsDialogOpen(false)} type="button">
                 Cancelar
               </Button>
               <Button onClick={handleSaveProduct} type="button">
