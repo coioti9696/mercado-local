@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { DashboardLayout } from '@/components/layouts/DashboardLayout';
 import { Order, OrderStatus } from '@/types';
 import { cn } from '@/lib/utils';
@@ -13,6 +13,13 @@ import {
   Truck,
   XCircle,
   Package,
+  ChevronDown,
+  ChevronUp,
+  BadgeCheck,
+  CreditCard,
+  Wallet,
+  TruckIcon,
+  Store,
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -83,8 +90,7 @@ const formatMoney = (value: number) =>
   );
 
 /**
- * ✅ AQUI ESTÁ O PULO DO GATO:
- * Pegamos o tipo real do item direto do seu Order em @/types,
+ * ✅ Pegamos o tipo real do item direto do seu Order em @/types,
  * pra não bater de frente com o TS.
  */
 type OrderItems = NonNullable<Order['items']>;
@@ -92,7 +98,6 @@ type OrderItem = OrderItems extends Array<infer T> ? T : never;
 
 /**
  * Resultado do select do Supabase (pedido_itens + produtos)
- * (tipagem local só pra facilitar o merge)
  */
 type PedidoItemRow = {
   pedido_id: string;
@@ -106,6 +111,20 @@ type PedidoItemRow = {
   } | null;
 };
 
+function paymentIcon(method?: string | null) {
+  const m = (method || '').toLowerCase();
+  if (m.includes('pix')) return Wallet;
+  if (m.includes('cart')) return CreditCard;
+  if (m.includes('din')) return Wallet;
+  return BadgeCheck;
+}
+
+function deliveryIcon(method?: string | null) {
+  const m = (method || '').toLowerCase();
+  if (m.includes('ret')) return Store;
+  return TruckIcon;
+}
+
 export default function ProducerOrders() {
   const { producer } = useAuth();
 
@@ -113,6 +132,23 @@ export default function ProducerOrders() {
     useState<OrderStatus | 'all'>('all');
   const [pedidos, setPedidos] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // ✅ controla expand/collapse por pedido
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+
+  const countsByStatus = useMemo(() => {
+    const counts: Record<string, number> = {
+      all: pedidos.length,
+      novo: 0,
+      confirmado: 0,
+      preparo: 0,
+      a_caminho: 0,
+      finalizado: 0,
+      cancelado: 0,
+    };
+    for (const p of pedidos) counts[p.status] = (counts[p.status] || 0) + 1;
+    return counts;
+  }, [pedidos]);
 
   useEffect(() => {
     if (!producer?.id) return;
@@ -179,11 +215,6 @@ export default function ProducerOrders() {
                   ? Number(it.total_item)
                   : unitPrice * quantity;
 
-              /**
-               * ✅ Montamos o objeto no formato "mais provável"
-               * e tipamos como OrderItem sem forçar alterações no seu @/types.
-               * Se seu OrderItem tiver campos extras, não quebra.
-               */
               const item = {
                 name: nome,
                 quantity,
@@ -234,12 +265,18 @@ export default function ProducerOrders() {
             createdAt: new Date(pedido.created_at),
             updatedAt: new Date(pedido.updated_at || pedido.created_at),
 
-            // ✅ agora vem com itens
             items: (itensPorDisplayId[displayId] || []) as unknown as OrderItems,
           };
         });
 
         setPedidos(pedidosFormatados);
+
+        // ✅ default: expande os "novo"
+        const nextExpanded: Record<string, boolean> = {};
+        for (const p of pedidosFormatados) {
+          nextExpanded[p.id] = p.status === 'novo';
+        }
+        setExpanded(nextExpanded);
       } catch (err) {
         console.error(err);
         toast.error('Erro ao carregar pedidos');
@@ -256,73 +293,129 @@ export default function ProducerOrders() {
       ? pedidos
       : pedidos.filter((p) => p.status === statusSelecionado);
 
-  const handleMudarStatus = async (
-    numeroPedido: string,
-    novoStatus: OrderStatus
-  ) => {
+  /**
+   * ✅ Correção importante:
+   * Seu pedido.id aqui é o "displayId" (numero_pedido OU uuid).
+   * Então na atualização, tentamos localizar:
+   * - primeiro por numero_pedido (se existir)
+   * - se não, tentamos por id (uuid)
+   */
+  const handleMudarStatus = async (displayId: string, novoStatus: OrderStatus) => {
     try {
-      const { data: pedido } = await supabase
+      // tenta por numero_pedido
+      const byNumero = await supabase
         .from('pedidos')
         .select('id')
-        .eq('numero_pedido', numeroPedido)
+        .eq('numero_pedido', displayId)
         .eq('produtor_id', producer!.id)
-        .single();
+        .maybeSingle();
 
-      if (!pedido) throw new Error('Pedido não encontrado');
+      let pedidoUuid = byNumero.data?.id as string | undefined;
 
-      await supabase
+      // fallback por uuid (quando displayId é uuid)
+      if (!pedidoUuid) {
+        const byId = await supabase
+          .from('pedidos')
+          .select('id')
+          .eq('id', displayId)
+          .eq('produtor_id', producer!.id)
+          .maybeSingle();
+
+        pedidoUuid = byId.data?.id as string | undefined;
+      }
+
+      if (!pedidoUuid) throw new Error('Pedido não encontrado');
+
+      const { error } = await supabase
         .from('pedidos')
         .update({ status: novoStatus })
-        .eq('id', pedido.id);
+        .eq('id', pedidoUuid);
+
+      if (error) throw error;
 
       setPedidos((prev) =>
-        prev.map((p) =>
-          p.id === numeroPedido ? { ...p, status: novoStatus } : p
-        )
+        prev.map((p) => (p.id === displayId ? { ...p, status: novoStatus } : p))
       );
 
-      toast.success(`Pedido #${numeroPedido} atualizado`);
-    } catch {
+      toast.success(`Pedido #${displayId} atualizado`);
+    } catch (e) {
+      console.error(e);
       toast.error('Erro ao atualizar pedido');
     }
   };
 
   return (
     <DashboardLayout type="producer">
-      {loading ? (
-        <div className="text-center py-12">
-          <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-primary mx-auto mb-4" />
-          <p>Carregando pedidos…</p>
-        </div>
-      ) : pedidosFiltrados.length === 0 ? (
-        <div className="text-center py-12">
-          <Package className="w-16 h-16 mx-auto mb-4 text-muted-foreground" />
-          <p>Nenhum pedido encontrado</p>
-        </div>
-      ) : (
-        <div className="space-y-6">
-          <div className="flex gap-2 overflow-x-auto">
-            {abasStatus.map((tab) => (
-              <button
-                key={tab.value}
-                onClick={() => setStatusSelecionado(tab.value)}
-                className={cn(
-                  'px-4 py-2 rounded-full text-sm font-medium',
-                  statusSelecionado === tab.value
-                    ? 'bg-primary text-white'
-                    : 'bg-secondary'
-                )}
-              >
-                {tab.label}
-              </button>
-            ))}
+      {/* Top bar */}
+      <div className="space-y-4">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight">Pedidos</h1>
+            <p className="text-sm text-muted-foreground">
+              Acompanhe, confirme e atualize o status dos pedidos.
+            </p>
           </div>
+        </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Filtro sticky */}
+        <div className="sticky top-0 z-20 -mx-4 px-4 py-3 bg-background/80 backdrop-blur border-b">
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {abasStatus.map((tab) => {
+              const active = statusSelecionado === tab.value;
+              const count = countsByStatus[tab.value] ?? 0;
+
+              return (
+                <button
+                  key={tab.value}
+                  onClick={() => setStatusSelecionado(tab.value)}
+                  className={cn(
+                    'shrink-0 inline-flex items-center gap-2 px-3 py-2 rounded-full text-sm font-medium border transition',
+                    active
+                      ? 'bg-primary text-primary-foreground border-primary'
+                      : 'bg-secondary/40 hover:bg-secondary border-border'
+                  )}
+                >
+                  <span>{tab.label}</span>
+                  <span
+                    className={cn(
+                      'text-xs px-2 py-0.5 rounded-full',
+                      active
+                        ? 'bg-primary-foreground/15 text-primary-foreground'
+                        : 'bg-background/60 text-muted-foreground'
+                    )}
+                  >
+                    {count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {loading ? (
+          <div className="py-10">
+            <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-primary mx-auto mb-4" />
+            <p className="text-center text-sm text-muted-foreground">
+              Carregando pedidos…
+            </p>
+          </div>
+        ) : pedidosFiltrados.length === 0 ? (
+          <div className="text-center py-12 border rounded-2xl bg-card">
+            <Package className="w-16 h-16 mx-auto mb-4 text-muted-foreground" />
+            <p className="font-medium">Nenhum pedido encontrado</p>
+            <p className="text-sm text-muted-foreground mt-1">
+              Quando um cliente fizer um pedido, ele aparece aqui.
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {pedidosFiltrados.map((pedido) => {
               const troco = extractTrocoFromNotes(pedido.notes);
+              const isOpen = !!expanded[pedido.id];
 
-              // render: usamos "unknown" pra não depender do shape exato do seu OrderItem
+              const PaymentIcon = paymentIcon(pedido.paymentMethod);
+              const DeliveryIcon = deliveryIcon(pedido.deliveryMethod);
+
               const itens = (pedido.items || []) as unknown as Array<{
                 name?: string;
                 quantity?: number;
@@ -331,111 +424,207 @@ export default function ProducerOrders() {
               }>;
 
               return (
-                <div key={pedido.id} className="border rounded-xl p-4">
-                  <div className="flex justify-between mb-2">
-                    <span className="font-semibold">#{pedido.id}</span>
-                    <StatusBadge status={pedido.status} />
-                  </div>
+                <div
+                  key={pedido.id}
+                  className="rounded-2xl border bg-card shadow-sm overflow-hidden"
+                >
+                  {/* Header */}
+                  <div className="p-4 sm:p-5">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-foreground">
+                            #{pedido.id}
+                          </span>
+                          <StatusBadge status={pedido.status} />
+                        </div>
 
-                  <p className="text-sm">{pedido.customerName}</p>
+                        <p className="text-sm text-muted-foreground mt-1">
+                          {pedido.customerName}
+                        </p>
+                      </div>
 
-                  <div className="text-sm text-muted-foreground mt-2 space-y-1">
-                    <div className="flex gap-2">
-                      <Phone className="w-4 h-4" />
-                      {pedido.customerPhone}
+                      <div className="text-right">
+                        <div className="text-lg font-bold text-primary">
+                          {formatMoney(Number(pedido.total) || 0)}
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          {formatDistanceToNow(pedido.createdAt, {
+                            addSuffix: true,
+                            locale: ptBR,
+                          })}
+                        </p>
+                      </div>
                     </div>
 
-                    <div className="flex gap-2">
-                      <MapPin className="w-4 h-4" />
-                      {pedido.customerAddress}
-                    </div>
+                    {/* Infos rápidas */}
+                    <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+                      <div className="flex items-center gap-2 text-muted-foreground">
+                        <Phone className="w-4 h-4" />
+                        <span className="text-foreground/90">
+                          {pedido.customerPhone || '—'}
+                        </span>
+                      </div>
 
-                    <div className="flex gap-2">
-                      <Clock className="w-4 h-4" />
-                      {formatDistanceToNow(pedido.createdAt, {
-                        addSuffix: true,
-                        locale: ptBR,
-                      })}
-                    </div>
+                      <div className="flex items-center gap-2 text-muted-foreground">
+                        <Clock className="w-4 h-4" />
+                        <span className="text-foreground/90">
+                          {pedido.deliveryDate || '—'}{' '}
+                          {pedido.deliveryTime ? `• ${pedido.deliveryTime}` : ''}
+                        </span>
+                      </div>
 
-                    {troco && (
-                      <div className="flex gap-2">
-                        <span className="w-4 h-4" />
-                        <span>
+                      <div className="flex items-center gap-2 text-muted-foreground sm:col-span-2">
+                        <MapPin className="w-4 h-4 shrink-0" />
+                        <span className="text-foreground/90 break-words">
+                          {pedido.customerAddress || '—'}
+                        </span>
+                      </div>
+
+                      {/* Pagamento / Entrega */}
+                      <div className="flex items-center gap-2 text-muted-foreground">
+                        <PaymentIcon className="w-4 h-4" />
+                        <span className="text-foreground/90">
+                          {pedido.paymentMethod || '—'}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-2 text-muted-foreground">
+                        <DeliveryIcon className="w-4 h-4" />
+                        <span className="text-foreground/90">
+                          {pedido.deliveryMethod || '—'}
+                        </span>
+                      </div>
+
+                      {troco && (
+                        <div className="sm:col-span-2 text-xs text-muted-foreground">
                           Troco:{' '}
                           <span className="font-medium text-foreground">
                             {troco}
                           </span>
-                        </span>
-                      </div>
-                    )}
-                  </div>
+                        </div>
+                      )}
 
-                  {/* ✅ ITENS */}
-                  <div className="mt-3 rounded-lg bg-secondary/40 p-3">
-                    <p className="text-sm font-semibold text-foreground mb-2">
-                      Itens do pedido
-                    </p>
-
-                    {itens.length === 0 ? (
-                      <p className="text-sm text-muted-foreground">
-                        Nenhum item encontrado para este pedido.
-                      </p>
-                    ) : (
-                      <div className="space-y-2">
-                        {itens.map((it, idx) => (
-                          <div
-                            key={`${pedido.id}-item-${idx}`}
-                            className="flex items-start justify-between gap-3"
-                          >
-                            <div className="min-w-0">
-                              <p className="text-sm font-medium text-foreground truncate">
-                                {(it.quantity ?? 0)}x {it.name || 'Produto'}
-                              </p>
-                              <p className="text-xs text-muted-foreground">
-                                {formatMoney(Number(it.unitPrice) || 0)} un.
-                              </p>
-                            </div>
-
-                            <div className="text-sm font-semibold text-foreground whitespace-nowrap">
-                              {formatMoney(Number(it.total) || 0)}
-                            </div>
-                          </div>
-                        ))}
-
-                        <div className="border-t pt-2 mt-2 flex justify-between text-sm">
-                          <span className="text-muted-foreground">Total</span>
-                          <span className="font-semibold text-foreground">
-                            {formatMoney(Number(pedido.total) || 0)}
+                      {!!pedido.notes?.trim() && (
+                        <div className="sm:col-span-2 text-xs text-muted-foreground">
+                          Obs:{' '}
+                          <span className="text-foreground/90">
+                            {pedido.notes}
                           </span>
                         </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Itens (colapsável) */}
+                  <div className="border-t">
+                    <button
+                      className="w-full px-4 sm:px-5 py-3 flex items-center justify-between hover:bg-secondary/30 transition"
+                      onClick={() =>
+                        setExpanded((prev) => ({
+                          ...prev,
+                          [pedido.id]: !prev[pedido.id],
+                        }))
+                      }
+                    >
+                      <div className="text-sm font-semibold">
+                        Itens do pedido{' '}
+                        <span className="text-muted-foreground font-normal">
+                          ({itens.length})
+                        </span>
+                      </div>
+                      {isOpen ? (
+                        <ChevronUp className="w-4 h-4 text-muted-foreground" />
+                      ) : (
+                        <ChevronDown className="w-4 h-4 text-muted-foreground" />
+                      )}
+                    </button>
+
+                    {isOpen && (
+                      <div className="px-4 sm:px-5 pb-4 space-y-2">
+                        {itens.length === 0 ? (
+                          <p className="text-sm text-muted-foreground">
+                            Nenhum item encontrado para este pedido.
+                          </p>
+                        ) : (
+                          <div className="space-y-2">
+                            {itens.map((it, idx) => (
+                              <div
+                                key={`${pedido.id}-item-${idx}`}
+                                className="flex items-start justify-between gap-3 rounded-xl bg-secondary/25 p-3"
+                              >
+                                <div className="min-w-0">
+                                  <p className="text-sm font-medium text-foreground truncate">
+                                    {(it.quantity ?? 0)}x {it.name || 'Produto'}
+                                  </p>
+                                  <p className="text-xs text-muted-foreground">
+                                    {formatMoney(Number(it.unitPrice) || 0)} un.
+                                  </p>
+                                </div>
+
+                                <div className="text-sm font-semibold text-foreground whitespace-nowrap">
+                                  {formatMoney(Number(it.total) || 0)}
+                                </div>
+                              </div>
+                            ))}
+
+                            <div className="pt-1 space-y-1 text-sm">
+                              <div className="flex justify-between text-muted-foreground">
+                                <span>Subtotal</span>
+                                <span>{formatMoney(Number(pedido.subtotal) || 0)}</span>
+                              </div>
+
+                              <div className="flex justify-between text-muted-foreground">
+                                <span>Entrega</span>
+                                <span>{formatMoney(Number(pedido.deliveryFee) || 0)}</span>
+                              </div>
+
+                              <div className="flex justify-between font-semibold">
+                                <span>Total</span>
+                                <span className="text-foreground">
+                                  {formatMoney(Number(pedido.total) || 0)}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
 
-                  <div className="border-t mt-3 pt-3 flex flex-wrap gap-2">
-                    {acoesStatus.map((acao) => {
-                      const Icon = acao.icon;
-                      return (
-                        <Button
-                          key={acao.status}
-                          size="sm"
-                          disabled={pedido.status === acao.status}
-                          onClick={() => handleMudarStatus(pedido.id, acao.status)}
-                          className="gap-1.5"
-                        >
-                          <Icon className="w-4 h-4" />
-                          {acao.label}
-                        </Button>
-                      );
-                    })}
+                  {/* Ações */}
+                  <div className="border-t p-4 sm:p-5">
+                    <div className="flex flex-wrap gap-2">
+                      {acoesStatus.map((acao) => {
+                        const Icon = acao.icon;
+                        const disabled = pedido.status === acao.status;
+
+                        return (
+                          <Button
+                            key={acao.status}
+                            size="sm"
+                            variant={acao.status === 'cancelado' ? 'destructive' : 'default'}
+                            disabled={disabled}
+                            onClick={() => handleMudarStatus(pedido.id, acao.status)}
+                            className={cn(
+                              'gap-1.5',
+                              acao.status !== 'cancelado' && 'bg-primary hover:bg-primary/90',
+                              disabled && 'opacity-60'
+                            )}
+                          >
+                            <Icon className="w-4 h-4" />
+                            {acao.label}
+                          </Button>
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
               );
             })}
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </DashboardLayout>
   );
 }
