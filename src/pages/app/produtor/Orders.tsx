@@ -20,6 +20,9 @@ import {
   Wallet,
   TruckIcon,
   Store,
+  CalendarDays,
+  Search,
+  RotateCcw,
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -125,6 +128,47 @@ function deliveryIcon(method?: string | null) {
   return TruckIcon;
 }
 
+/** =========================
+ *  ✅ TIMEZONE SP (VISUAL)
+ *  - Converte Date -> "YYYY-MM-DD" no fuso de SP
+ *  - Mostra "dd/MM/yyyy • HH:mm" no fuso de SP
+ ========================= */
+const TZ_SP = 'America/Sao_Paulo';
+
+function toDateKeyInSP(date: Date) {
+  // yyyy-mm-dd
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: TZ_SP,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+
+  const y = parts.find((p) => p.type === 'year')?.value || '0000';
+  const m = parts.find((p) => p.type === 'month')?.value || '00';
+  const d = parts.find((p) => p.type === 'day')?.value || '00';
+  return `${y}-${m}-${d}`;
+}
+
+function formatDateTimeSP(date: Date) {
+  return new Intl.DateTimeFormat('pt-BR', {
+    timeZone: TZ_SP,
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
+}
+
+function normalizeDeliveryLabel(method?: string | null) {
+  const m = (method || '').trim().toLowerCase();
+  if (!m) return 'Entrega';
+  // Se vier "retirada", "retirar", etc -> troca só no texto
+  if (m.includes('ret')) return 'Entrega';
+  return method || 'Entrega';
+}
+
 export default function ProducerOrders() {
   const { producer } = useAuth();
 
@@ -135,6 +179,11 @@ export default function ProducerOrders() {
 
   // ✅ controla expand/collapse por pedido
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+
+  // ✅ novos filtros (somente UI)
+  const [searchId, setSearchId] = useState('');
+  const [dateFrom, setDateFrom] = useState(''); // yyyy-mm-dd
+  const [dateTo, setDateTo] = useState(''); // yyyy-mm-dd
 
   const countsByStatus = useMemo(() => {
     const counts: Record<string, number> = {
@@ -256,7 +305,10 @@ export default function ProducerOrders() {
             total: Number(pedido.total) || 0,
             subtotal: Number(pedido.subtotal) || 0,
             deliveryFee: Number(pedido.taxa_entrega) || 0,
+
+            // ✅ não muda o valor do banco, só UI vai mostrar "Entrega"
             deliveryMethod: pedido.metodo_entrega,
+
             deliveryDate: pedido.data_entrega,
             deliveryTime: pedido.horario_entrega,
             notes: pedido.observacoes,
@@ -288,10 +340,27 @@ export default function ProducerOrders() {
     buscarPedidos();
   }, [producer?.id]);
 
-  const pedidosFiltrados =
-    statusSelecionado === 'all'
-      ? pedidos
-      : pedidos.filter((p) => p.status === statusSelecionado);
+  // ✅ filtros locais (seguro, não interfere no banco)
+  const pedidosFiltrados = useMemo(() => {
+    const base =
+      statusSelecionado === 'all'
+        ? pedidos
+        : pedidos.filter((p) => p.status === statusSelecionado);
+
+    const q = searchId.trim().toLowerCase();
+
+    return base.filter((p) => {
+      // 1) busca por número/uuid (displayId)
+      const matchSearch = !q || String(p.id).toLowerCase().includes(q);
+
+      // 2) filtro por data (createdAt no fuso SP)
+      const key = toDateKeyInSP(p.createdAt);
+      const matchFrom = !dateFrom || key >= dateFrom;
+      const matchTo = !dateTo || key <= dateTo;
+
+      return matchSearch && matchFrom && matchTo;
+    });
+  }, [pedidos, statusSelecionado, searchId, dateFrom, dateTo]);
 
   /**
    * ✅ Correção importante:
@@ -344,6 +413,12 @@ export default function ProducerOrders() {
     }
   };
 
+  const clearFilters = () => {
+    setSearchId('');
+    setDateFrom('');
+    setDateTo('');
+  };
+
   return (
     <DashboardLayout type="producer">
       {/* Top bar */}
@@ -357,8 +432,9 @@ export default function ProducerOrders() {
           </div>
         </div>
 
-        {/* Filtro sticky */}
-        <div className="sticky top-0 z-20 -mx-4 px-4 py-3 bg-background/80 backdrop-blur border-b">
+        {/* Filtros sticky */}
+        <div className="sticky top-0 z-20 -mx-4 px-4 py-3 bg-background/80 backdrop-blur border-b space-y-3">
+          {/* Tabs status */}
           <div className="flex gap-2 overflow-x-auto pb-1">
             {abasStatus.map((tab) => {
               const active = statusSelecionado === tab.value;
@@ -390,6 +466,66 @@ export default function ProducerOrders() {
               );
             })}
           </div>
+
+          {/* Novos filtros (busca + data) */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-2">
+            {/* Busca por pedido */}
+            <div className="lg:col-span-5">
+              <div className="relative">
+                <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  value={searchId}
+                  onChange={(e) => setSearchId(e.target.value)}
+                  placeholder="Buscar por número do pedido…"
+                  className="w-full h-10 pl-9 pr-3 rounded-xl border bg-background text-sm outline-none focus:ring-2 focus:ring-primary/30"
+                />
+              </div>
+            </div>
+
+            {/* Data início */}
+            <div className="lg:col-span-3">
+              <div className="relative">
+                <CalendarDays className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="date"
+                  value={dateFrom}
+                  onChange={(e) => setDateFrom(e.target.value)}
+                  className="w-full h-10 pl-9 pr-3 rounded-xl border bg-background text-sm outline-none focus:ring-2 focus:ring-primary/30"
+                />
+              </div>
+              <p className="text-[11px] text-muted-foreground mt-1">
+                Data inicial (São Paulo)
+              </p>
+            </div>
+
+            {/* Data fim */}
+            <div className="lg:col-span-3">
+              <div className="relative">
+                <CalendarDays className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="date"
+                  value={dateTo}
+                  onChange={(e) => setDateTo(e.target.value)}
+                  className="w-full h-10 pl-9 pr-3 rounded-xl border bg-background text-sm outline-none focus:ring-2 focus:ring-primary/30"
+                />
+              </div>
+              <p className="text-[11px] text-muted-foreground mt-1">
+                Data final (São Paulo)
+              </p>
+            </div>
+
+            {/* Limpar */}
+            <div className="lg:col-span-1 flex lg:justify-end">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={clearFilters}
+                className="h-10 w-full lg:w-auto rounded-xl"
+              >
+                <RotateCcw className="w-4 h-4" />
+              </Button>
+            </div>
+          </div>
         </div>
 
         {loading ? (
@@ -404,7 +540,7 @@ export default function ProducerOrders() {
             <Package className="w-16 h-16 mx-auto mb-4 text-muted-foreground" />
             <p className="font-medium">Nenhum pedido encontrado</p>
             <p className="text-sm text-muted-foreground mt-1">
-              Quando um cliente fizer um pedido, ele aparece aqui.
+              Ajuste os filtros ou aguarde novos pedidos.
             </p>
           </div>
         ) : (
@@ -422,6 +558,9 @@ export default function ProducerOrders() {
                 unitPrice?: number;
                 total?: number;
               }>;
+
+              // ✅ horário SP (visual)
+              const createdLabelSP = formatDateTimeSP(pedido.createdAt);
 
               return (
                 <div
@@ -448,11 +587,14 @@ export default function ProducerOrders() {
                         <div className="text-lg font-bold text-primary">
                           {formatMoney(Number(pedido.total) || 0)}
                         </div>
+
+                        {/* ✅ agora com fuso SP (e mais informativo) */}
                         <p className="text-xs text-muted-foreground">
                           {formatDistanceToNow(pedido.createdAt, {
                             addSuffix: true,
                             locale: ptBR,
-                          })}
+                          })}{' '}
+                          • {createdLabelSP}
                         </p>
                       </div>
                     </div>
@@ -492,7 +634,8 @@ export default function ProducerOrders() {
                       <div className="flex items-center gap-2 text-muted-foreground">
                         <DeliveryIcon className="w-4 h-4" />
                         <span className="text-foreground/90">
-                          {pedido.deliveryMethod || '—'}
+                          {/* ✅ troca “retirada” por “Entrega” na UI */}
+                          {normalizeDeliveryLabel(pedido.deliveryMethod)}
                         </span>
                       </div>
 
