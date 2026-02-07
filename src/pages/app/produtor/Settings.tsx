@@ -4,7 +4,15 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
-import { Upload, Save, Loader2, X, Link2Off, Link2, Clock3 } from 'lucide-react';
+import {
+  Upload,
+  Save,
+  Loader2,
+  X,
+  Link2Off,
+  Link2,
+  Clock3,
+} from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { toast } from 'sonner';
 import { useAuth } from '@/contexts/AuthContext';
@@ -25,8 +33,8 @@ const ProducerSettings = () => {
   const [aceitaDinheiro, setAceitaDinheiro] = useState(true);
   const [aceitaCartao, setAceitaCartao] = useState(false);
 
-  // ✅ NOVO: horário de funcionamento (texto)
-  const [horarioFuncionamento, setHorarioFuncionamento] = useState('');
+  // ✅ NOVO: horário de atendimento (texto)
+  const [horarioAtendimento, setHorarioAtendimento] = useState('');
 
   // Mercado Pago
   const [mpConnected, setMpConnected] = useState<boolean>(false);
@@ -67,8 +75,8 @@ const ProducerSettings = () => {
         setAceitaDinheiro(data.aceita_dinheiro !== false);
         setAceitaCartao(Boolean(data.aceita_cartao));
 
-        // ✅ NOVO: horário (não quebra se vier null)
-        setHorarioFuncionamento(data.horario_funcionamento || '');
+        // ✅ NOVO: horário (campo REAL = horario_atendimento)
+        setHorarioAtendimento(data.horario_atendimento || '');
 
         // ✅ Mercado Pago status
         setMpConnected(Boolean(data.mp_connected));
@@ -210,8 +218,8 @@ const ProducerSettings = () => {
           aceita_dinheiro: aceitaDinheiro,
           aceita_cartao: aceitaCartao,
 
-          // ✅ NOVO: salva horário (texto)
-          horario_funcionamento: horarioFuncionamento?.trim() || null,
+          // ✅ NOVO: salva horário (campo REAL = horario_atendimento)
+          horario_atendimento: horarioAtendimento?.trim() || null,
 
           updated_at: new Date().toISOString(),
         })
@@ -318,7 +326,7 @@ const ProducerSettings = () => {
             </div>
           </div>
 
-          {/* ✅ NOVO: HORÁRIO DE FUNCIONAMENTO (somente visual + salva no produtores) */}
+          {/* ✅ NOVO: HORÁRIO DE ATENDIMENTO */}
           <div className="rounded-xl border bg-card p-5 space-y-3">
             <div className="flex items-start justify-between gap-4">
               <div>
@@ -339,12 +347,12 @@ const ProducerSettings = () => {
             <div className="space-y-2">
               <Label>Texto do horário</Label>
               <Input
-                value={horarioFuncionamento}
-                onChange={(e) => setHorarioFuncionamento(e.target.value)}
+                value={horarioAtendimento}
+                onChange={(e) => setHorarioAtendimento(e.target.value)}
                 placeholder="Ex.: Seg–Sex 08:00–18:00 • Sáb 08:00–12:00"
               />
               <p className="text-xs text-muted-foreground">
-                Dica: mantenha curto. Se estiver vazio, a loja mostrará “a configurar”.
+                Dica: mantenha curto. Se estiver vazio, a loja pode mostrar “a configurar”.
               </p>
             </div>
           </div>
