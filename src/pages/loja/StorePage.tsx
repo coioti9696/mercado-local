@@ -48,9 +48,8 @@ interface StoreProducer {
   // ✅ NOVO (não quebra se ainda não existir na view; tratamos com fallback)
   aberto?: boolean | null;
 
-  // ✅ Horário (vamos exibir bonito; depois você cria/edita no settings)
-  // Pode ser um texto simples tipo "Seg–Sex 08:00–18:00 • Sáb 08:00–12:00"
-  horario_funcionamento?: string | null;
+  // ✅ Campo REAL no seu banco/painel:
+  horario_atendimento?: string | null;
 }
 
 interface Order {
@@ -149,13 +148,13 @@ const StorePage = () => {
       try {
         /**
          * ✅ IMPORTANTE (não quebrar):
-         * Sua view produtores_public (hoje) ainda NÃO tem "aberto" e "horario_funcionamento".
+         * Sua view produtores_public (hoje) pode ainda NÃO ter "aberto" e "horario_atendimento".
          * Então fazemos:
          * 1) tenta buscar com os campos novos
          * 2) se der erro, cai no select antigo (o que você já usa)
          */
         const selectNovo =
-          'id, nome_loja, slug, cidade, estado, telefone, logo_url, capa_url, descricao, cor_principal, aceita_pix, aceita_dinheiro, aceita_cartao, ativo, aberto, horario_funcionamento';
+          'id, nome_loja, slug, cidade, estado, telefone, logo_url, capa_url, descricao, cor_principal, aceita_pix, aceita_dinheiro, aceita_cartao, ativo, aberto, horario_atendimento';
 
         const selectAntigo =
           'id, nome_loja, slug, cidade, estado, telefone, logo_url, capa_url, descricao, cor_principal, aceita_pix, aceita_dinheiro, aceita_cartao, ativo';
@@ -205,9 +204,11 @@ const StorePage = () => {
 
           // ✅ defaults seguros (se a view ainda não trouxer)
           aberto: typeof produtor.aberto === 'boolean' ? produtor.aberto : true,
-          horario_funcionamento:
-            typeof produtor.horario_funcionamento === 'string'
-              ? produtor.horario_funcionamento
+
+          // ✅ aqui é o ponto: agora lê o campo certo
+          horario_atendimento:
+            typeof produtor.horario_atendimento === 'string'
+              ? produtor.horario_atendimento
               : '',
         });
 
@@ -432,15 +433,15 @@ const StorePage = () => {
                       {producer.cidade}, {producer.estado}
                     </p>
 
-                    {/* horário (placeholder bonito — depois a gente liga no settings) */}
+                    {/* ✅ horário agora pega o campo CERTO */}
                     <div className="w-full mt-1">
                       <div className="inline-flex items-center justify-center sm:justify-start gap-2 text-xs text-muted-foreground">
                         <span className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-primary/10">
                           <Clock3 className="w-4 h-4 text-primary" />
                         </span>
                         <span className="text-foreground/80">
-                          {producer.horario_funcionamento?.trim()
-                            ? producer.horario_funcionamento
+                          {producer.horario_atendimento?.trim()
+                            ? producer.horario_atendimento
                             : 'Horário de atendimento: a configurar'}
                         </span>
                       </div>
