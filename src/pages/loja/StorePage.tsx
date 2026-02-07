@@ -16,6 +16,7 @@ import {
   MessageCircle,
   ShieldCheck,
   Sparkles,
+  Clock3,
 } from 'lucide-react';
 import {
   Sheet,
@@ -43,6 +44,13 @@ interface StoreProducer {
   aceita_dinheiro?: boolean;
   aceita_cartao?: boolean;
   ativo?: boolean;
+
+  // ✅ NOVO (não quebra se ainda não existir na view; tratamos com fallback)
+  aberto?: boolean | null;
+
+  // ✅ Horário (vamos exibir bonito; depois você cria/edita no settings)
+  // Pode ser um texto simples tipo "Seg–Sex 08:00–18:00 • Sáb 08:00–12:00"
+  horario_funcionamento?: string | null;
 }
 
 interface Order {
@@ -80,7 +88,6 @@ const phoneToWhatsAppLink = (raw?: string) => {
   if (!raw) return '';
   const digits = raw.replace(/\D/g, '');
   if (!digits) return '';
-  // Brasil: garante 55
   const withCountry = digits.startsWith('55') ? digits : `55${digits}`;
   return `https://wa.me/${withCountry}`;
 };
@@ -140,16 +147,50 @@ const StorePage = () => {
       setLoading(true);
 
       try {
-        const { data: produtor, error: prodErr } = await supabaseGuest
+        /**
+         * ✅ IMPORTANTE (não quebrar):
+         * Sua view produtores_public (hoje) ainda NÃO tem "aberto" e "horario_funcionamento".
+         * Então fazemos:
+         * 1) tenta buscar com os campos novos
+         * 2) se der erro, cai no select antigo (o que você já usa)
+         */
+        const selectNovo =
+          'id, nome_loja, slug, cidade, estado, telefone, logo_url, capa_url, descricao, cor_principal, aceita_pix, aceita_dinheiro, aceita_cartao, ativo, aberto, horario_funcionamento';
+
+        const selectAntigo =
+          'id, nome_loja, slug, cidade, estado, telefone, logo_url, capa_url, descricao, cor_principal, aceita_pix, aceita_dinheiro, aceita_cartao, ativo';
+
+        let produtor: any = null;
+
+        // 1) tenta novo
+        const tentativaNova = await supabaseGuest
           .from('produtores_public')
-          .select(
-            'id, nome_loja, slug, cidade, estado, telefone, logo_url, capa_url, descricao, cor_principal, aceita_pix, aceita_dinheiro, aceita_cartao, ativo'
-          )
+          .select(selectNovo)
           .eq('slug', slug)
           .maybeSingle();
 
-        if (prodErr || !produtor) {
-          console.error('Erro ao carregar produtor:', prodErr);
+        if (!tentativaNova.error) {
+          produtor = tentativaNova.data;
+        } else {
+          // 2) fallback antigo (evita quebrar em produção)
+          const tentativaAntiga = await supabaseGuest
+            .from('produtores_public')
+            .select(selectAntigo)
+            .eq('slug', slug)
+            .maybeSingle();
+
+          produtor = tentativaAntiga.data;
+
+          if (tentativaAntiga.error) {
+            console.error('Erro ao carregar produtor:', tentativaAntiga.error);
+            setProducer(null);
+            setProducts([]);
+            setTodayOrders([]);
+            return;
+          }
+        }
+
+        if (!produtor) {
           setProducer(null);
           setProducts([]);
           setTodayOrders([]);
@@ -161,6 +202,13 @@ const StorePage = () => {
           descricao: produtor.descricao || '',
           logo_url: gerarUrlPublica(produtor.logo_url),
           capa_url: gerarUrlPublica(produtor.capa_url),
+
+          // ✅ defaults seguros (se a view ainda não trouxer)
+          aberto: typeof produtor.aberto === 'boolean' ? produtor.aberto : true,
+          horario_funcionamento:
+            typeof produtor.horario_funcionamento === 'string'
+              ? produtor.horario_funcionamento
+              : '',
         });
 
         const { data: produtos, error: produtosErr } = await supabaseGuest
@@ -229,7 +277,11 @@ const StorePage = () => {
   );
 
   const hasAnyPayment =
-    !!producer?.aceita_pix || !!producer?.aceita_cartao || !!producer?.aceita_dinheiro;
+    !!producer?.aceita_pix ||
+    !!producer?.aceita_cartao ||
+    !!producer?.aceita_dinheiro;
+
+  const lojaAberta = producer?.aberto !== false; // default true
 
   // ===============================
   // ACTIONS (cliente sem login)
@@ -334,23 +386,66 @@ const StorePage = () => {
                 </div>
 
                 {/* header info */}
-                <div className="flex-1 text-center sm:text-left">
-                  <div className="flex items-center justify-center sm:justify-start gap-2">
-                    <h1 className="text-2xl sm:text-3xl font-bold">
-                      {producer.nome_loja}
-                    </h1>
-                    <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs border bg-background">
-                      <ShieldCheck className="w-3.5 h-3.5" />
-                      Loja verificada
-                    </span>
-                  </div>
+                <div className="flex-1">
+                  {/* ✅ corrigido: título sempre central no mobile e organizado */}
+                  <div className="flex flex-col items-center sm:items-start text-center sm:text-left gap-2">
+                    {/* linha do nome */}
+                    <div className="w-full flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                      <div className="flex flex-col items-center sm:items-start gap-2">
+                        <h1 className="text-2xl sm:text-3xl font-bold leading-tight break-words">
+                          {producer.nome_loja}
+                        </h1>
 
-                  <p className="mt-1 text-sm text-muted-foreground inline-flex items-center justify-center sm:justify-start gap-2">
-                    <span className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-primary/10">
-                      <MapPin className="w-4 h-4 text-primary" />
-                    </span>
-                    {producer.cidade}, {producer.estado}
-                  </p>
+                        {/* badges: em mobile ficam em linha abaixo do título */}
+                        <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2">
+                          <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs border bg-background">
+                            <ShieldCheck className="w-3.5 h-3.5" />
+                            Loja verificada
+                          </span>
+
+                          <span
+                            className={[
+                              'inline-flex items-center gap-2 px-2 py-1 rounded-full text-xs border',
+                              lojaAberta
+                                ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-700'
+                                : 'bg-rose-500/10 border-rose-500/20 text-rose-700',
+                            ].join(' ')}
+                            title="Status da loja"
+                          >
+                            <span
+                              className={[
+                                'inline-block w-2 h-2 rounded-full',
+                                lojaAberta ? 'bg-emerald-500' : 'bg-rose-500',
+                              ].join(' ')}
+                            />
+                            {lojaAberta ? 'Aberto' : 'Fechado'}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* localização */}
+                    <p className="text-sm text-muted-foreground inline-flex items-center justify-center sm:justify-start gap-2">
+                      <span className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-primary/10">
+                        <MapPin className="w-4 h-4 text-primary" />
+                      </span>
+                      {producer.cidade}, {producer.estado}
+                    </p>
+
+                    {/* horário (placeholder bonito — depois a gente liga no settings) */}
+                    <div className="w-full mt-1">
+                      <div className="inline-flex items-center justify-center sm:justify-start gap-2 text-xs text-muted-foreground">
+                        <span className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-primary/10">
+                          <Clock3 className="w-4 h-4 text-primary" />
+                        </span>
+                        <span className="text-foreground/80">
+                          {producer.horario_funcionamento?.trim()
+                            ? producer.horario_funcionamento
+                            : 'Horário de atendimento: a configurar'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
 
                   {/* quick actions */}
                   <div className="mt-4 flex flex-col sm:flex-row gap-2 sm:items-center sm:justify-start">
@@ -434,6 +529,14 @@ const StorePage = () => {
                       </SheetContent>
                     </Sheet>
                   </div>
+
+                  {/* ✅ aviso se fechado (não bloqueia, só informa — você decide depois) */}
+                  {!lojaAberta && (
+                    <div className="mt-3 rounded-2xl border bg-rose-500/10 border-rose-500/20 p-3 text-sm text-rose-700">
+                      A loja está <b>fechada</b> no momento. Você ainda pode ver os produtos,
+                      mas a disponibilidade pode ser limitada.
+                    </div>
+                  )}
                 </div>
               </div>
 
