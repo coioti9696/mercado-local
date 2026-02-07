@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
-import { Upload, Save, Loader2, X, Link2Off, Link2 } from 'lucide-react';
+import { Upload, Save, Loader2, X, Link2Off, Link2, Clock3 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { toast } from 'sonner';
 import { useAuth } from '@/contexts/AuthContext';
@@ -24,6 +24,9 @@ const ProducerSettings = () => {
   const [aceitaPix, setAceitaPix] = useState(true);
   const [aceitaDinheiro, setAceitaDinheiro] = useState(true);
   const [aceitaCartao, setAceitaCartao] = useState(false);
+
+  // ✅ NOVO: horário de funcionamento (texto)
+  const [horarioFuncionamento, setHorarioFuncionamento] = useState('');
 
   // Mercado Pago
   const [mpConnected, setMpConnected] = useState<boolean>(false);
@@ -63,6 +66,9 @@ const ProducerSettings = () => {
         setAceitaPix(data.aceita_pix !== false);
         setAceitaDinheiro(data.aceita_dinheiro !== false);
         setAceitaCartao(Boolean(data.aceita_cartao));
+
+        // ✅ NOVO: horário (não quebra se vier null)
+        setHorarioFuncionamento(data.horario_funcionamento || '');
 
         // ✅ Mercado Pago status
         setMpConnected(Boolean(data.mp_connected));
@@ -115,46 +121,41 @@ const ProducerSettings = () => {
     }
   };
 
- // =====================
-// MERCADO PAGO CONNECT
-// =====================
-const handleConnectMP = async () => {
-  try {
-    if (!producer?.id) return;
+  // =====================
+  // MERCADO PAGO CONNECT
+  // =====================
+  const handleConnectMP = async () => {
+    try {
+      if (!producer?.id) return;
 
-    setMpLoading(true);
+      setMpLoading(true);
 
-    // ✅ NÃO setar Authorization manualmente.
-    // O supabase-js já envia o JWT da sessão automaticamente para Functions.
-    const { data, error } = await supabase.functions.invoke('mp-oauth-start', {
-      body: {
-        produtor_id: producer.id,
-      },
-    });
+      const { data, error } = await supabase.functions.invoke('mp-oauth-start', {
+        body: {
+          produtor_id: producer.id,
+        },
+      });
 
-    if (error) {
-      console.error('mp-oauth-start error:', error);
-      toast.error(error.message || 'Erro ao iniciar conexão com Mercado Pago');
-      return;
+      if (error) {
+        console.error('mp-oauth-start error:', error);
+        toast.error(error.message || 'Erro ao iniciar conexão com Mercado Pago');
+        return;
+      }
+
+      if (!data?.ok || !data?.url) {
+        console.error('mp-oauth-start response:', data);
+        toast.error(data?.error || 'Falha ao gerar link de autorização');
+        return;
+      }
+
+      window.location.href = data.url;
+    } catch (err: any) {
+      console.error(err);
+      toast.error(err?.message || 'Erro ao conectar Mercado Pago');
+    } finally {
+      setMpLoading(false);
     }
-
-    // ✅ sua Edge Function retorna "url" (não "auth_url")
-    if (!data?.ok || !data?.url) {
-      console.error('mp-oauth-start response:', data);
-      toast.error(data?.error || 'Falha ao gerar link de autorização');
-      return;
-    }
-
-    // ✅ Redireciona para o Mercado Pago
-    window.location.href = data.url;
-  } catch (err: any) {
-    console.error(err);
-    toast.error(err?.message || 'Erro ao conectar Mercado Pago');
-  } finally {
-    setMpLoading(false);
-  }
-};
-
+  };
 
   // =====================
   // MERCADO PAGO DISCONNECT (DB ONLY)
@@ -198,7 +199,7 @@ const handleConnectMP = async () => {
 
     setSaving(true);
     try {
-      await supabase
+      const { error } = await supabase
         .from('produtores')
         .update({
           nome_loja: nomeLoja,
@@ -208,12 +209,19 @@ const handleConnectMP = async () => {
           aceita_pix: aceitaPix,
           aceita_dinheiro: aceitaDinheiro,
           aceita_cartao: aceitaCartao,
+
+          // ✅ NOVO: salva horário (texto)
+          horario_funcionamento: horarioFuncionamento?.trim() || null,
+
           updated_at: new Date().toISOString(),
         })
         .eq('id', producer.id);
 
+      if (error) throw error;
+
       toast.success('Configurações salvas');
-    } catch {
+    } catch (err) {
+      console.error(err);
       toast.error('Erro ao salvar');
     } finally {
       setSaving(false);
@@ -261,7 +269,11 @@ const handleConnectMP = async () => {
                   disabled={mpLoading}
                   className="gap-2"
                 >
-                  {mpLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Link2 className="w-4 h-4" />}
+                  {mpLoading ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Link2 className="w-4 h-4" />
+                  )}
                   Conectar Mercado Pago
                 </Button>
               ) : (
@@ -272,7 +284,11 @@ const handleConnectMP = async () => {
                   disabled={mpLoading}
                   className="gap-2"
                 >
-                  {mpLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Link2Off className="w-4 h-4" />}
+                  {mpLoading ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Link2Off className="w-4 h-4" />
+                  )}
                   Desconectar
                 </Button>
               )}
@@ -299,6 +315,37 @@ const handleConnectMP = async () => {
               >
                 Atualizar status
               </Button>
+            </div>
+          </div>
+
+          {/* ✅ NOVO: HORÁRIO DE FUNCIONAMENTO (somente visual + salva no produtores) */}
+          <div className="rounded-xl border bg-card p-5 space-y-3">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="font-semibold">Horário de atendimento</p>
+                <p className="text-sm text-muted-foreground">
+                  Este texto aparece na sua loja pública. Use um padrão simples (ex.:{' '}
+                  <span className="font-medium text-foreground">
+                    Seg–Sex 08:00–18:00 • Sáb 08:00–12:00
+                  </span>
+                  ).
+                </p>
+              </div>
+              <span className="inline-flex items-center justify-center w-10 h-10 rounded-xl bg-primary/10">
+                <Clock3 className="w-5 h-5 text-primary" />
+              </span>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Texto do horário</Label>
+              <Input
+                value={horarioFuncionamento}
+                onChange={(e) => setHorarioFuncionamento(e.target.value)}
+                placeholder="Ex.: Seg–Sex 08:00–18:00 • Sáb 08:00–12:00"
+              />
+              <p className="text-xs text-muted-foreground">
+                Dica: mantenha curto. Se estiver vazio, a loja mostrará “a configurar”.
+              </p>
             </div>
           </div>
 
@@ -348,7 +395,9 @@ const handleConnectMP = async () => {
                 type="file"
                 hidden
                 accept="image/*"
-                onChange={e => e.target.files && uploadImagem(e.target.files[0], 'capa')}
+                onChange={(e) =>
+                  e.target.files && uploadImagem(e.target.files[0], 'capa')
+                }
               />
             </div>
           </div>
@@ -397,7 +446,9 @@ const handleConnectMP = async () => {
                 type="file"
                 hidden
                 accept="image/*"
-                onChange={e => e.target.files && uploadImagem(e.target.files[0], 'logo')}
+                onChange={(e) =>
+                  e.target.files && uploadImagem(e.target.files[0], 'logo')
+                }
               />
             </div>
           </div>
@@ -405,17 +456,17 @@ const handleConnectMP = async () => {
           {/* INFO */}
           <div>
             <Label>Nome da Loja</Label>
-            <Input value={nomeLoja} onChange={e => setNomeLoja(e.target.value)} />
+            <Input value={nomeLoja} onChange={(e) => setNomeLoja(e.target.value)} />
           </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div>
               <Label>Cidade</Label>
-              <Input value={cidade} onChange={e => setCidade(e.target.value)} />
+              <Input value={cidade} onChange={(e) => setCidade(e.target.value)} />
             </div>
             <div>
               <Label>Estado</Label>
-              <Input value={estado} onChange={e => setEstado(e.target.value)} />
+              <Input value={estado} onChange={(e) => setEstado(e.target.value)} />
             </div>
           </div>
 
@@ -424,7 +475,7 @@ const handleConnectMP = async () => {
             <textarea
               className="w-full border rounded p-3"
               value={descricao}
-              onChange={e => setDescricao(e.target.value)}
+              onChange={(e) => setDescricao(e.target.value)}
             />
           </div>
 
